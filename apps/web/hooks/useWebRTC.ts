@@ -17,7 +17,15 @@ export function useWebRTC(options: UseWebRTCOptions = {}) {
     const [connectionState, setConnectionState] =
         useState<RTCPeerConnectionState>("new");
 
-    const remoteStreamRef = useRef<MediaStream>(new MediaStream());
+    const remoteStreamRef = useRef<MediaStream | null>(null);
+
+    const getRemoteStream = useCallback(() => {
+        if (!remoteStreamRef.current) {
+            remoteStreamRef.current = new MediaStream();
+        }
+
+        return remoteStreamRef.current;
+    }, []);
 
     const manager = useMemo(
         () =>
@@ -28,17 +36,19 @@ export function useWebRTC(options: UseWebRTCOptions = {}) {
                 {
                     onIceCandidate: options.onIceCandidate,
                     onTrack: (event) => {
+                        const remote = getRemoteStream();
+
                         event.streams[0]?.getTracks().forEach((track) => {
-                            remoteStreamRef.current.addTrack(track);
+                            remote.addTrack(track);
                         });
-                        setRemoteStream(new MediaStream(remoteStreamRef.current.getTracks()));
+                        setRemoteStream(new MediaStream(remote.getTracks()));
                     },
                     onConnectionStateChange: (state) => {
                         setConnectionState(state);
                     },
                 }
             ),
-        [options.onIceCandidate]
+        [getRemoteStream, options.onIceCandidate]
     );
 
     const startLocalMedia = useCallback(async () => {
@@ -77,8 +87,8 @@ export function useWebRTC(options: UseWebRTCOptions = {}) {
 
     const close = useCallback(() => {
         stopLocalMedia();
-        remoteStreamRef.current.getTracks().forEach((track) => track.stop());
-        remoteStreamRef.current = new MediaStream();
+        remoteStreamRef.current?.getTracks().forEach((track) => track.stop());
+        remoteStreamRef.current = null;
         setRemoteStream(null);
         manager.close();
     }, [manager, stopLocalMedia]);
