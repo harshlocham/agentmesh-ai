@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createLLMProvider, recommendProviderForTaskProfile, validateProviderStartup } from "../services/llm/provider-factory.js";
+import { getAllLLMProviderMetricsSnapshots, resetLLMProviderMetrics } from "../services/llm/metrics.js";
+import { HuggingFaceProvider } from "../services/llm/providers/huggingface-provider.js";
 import { OpenAIProvider } from "../services/llm/providers/openai-provider.js";
 import { parseJsonResponse, parseJsonText } from "../services/llm/response-parser.js";
 import { LLMError, type LLMProviderConfig } from "../services/llm/types.js";
@@ -51,7 +54,7 @@ function createProvider(config: Partial<LLMProviderConfig> = {}, client?: Provid
         supportsToolCalling: true,
         supportsStreaming: true,
         ...config,
-    }, client);
+    }, client as never);
 }
 
 test("response parser repairs fenced and trailing JSON", () => {
@@ -145,4 +148,66 @@ test("openai provider surfaces timeout errors as retryable llm errors", async ()
         () => provider.generate({ model: "gpt-4o-mini", input: "slow" }),
         (error: unknown) => error instanceof LLMError && error.code === "LLM_TIMEOUT" && error.retryable === true
     );
+});
+
+test("factory routes amd openai-compatible providers through the openai transport", () => {
+    const provider = createLLMProvider({
+        provider: "amd-openai-compatible",
+        apiKey: "test-key",
+        baseUrl: "http://amd.local/v1",
+        model: "mixtral",
+        logRequests: false,
+    });
+
+    assert.equal(provider instanceof OpenAIProvider, true);
+    assert.equal(provider.supportsResponsesApi(), false);
+});
+
+test("hugging face inference api provider normalizes text output", async () => {
+    resetLLMProviderMetrics();
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify([{ generated_text: "hf response" }]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+
+    try {
+        const provider = new HuggingFaceProvider({
+            provider: "huggingface",
+            apiKey: "hf-test-key",
+            baseUrl: "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3",
+            model: "mistralai/Mistral-7B-Instruct-v0.3",
+            transport: "inference-api",
+            logRequests: false,
+            supportsJsonMode: false,
+            supportsStructuredOutputs: false,
+            supportsToolCalling: false,
+            supportsStreaming: false,
+        });
+
+        const response = await provider.generate({ model: "mistralai/Mistral-7B-Instruct-v0.3", input: "hello" });
+
+        assert.equal(response.provider, "huggingface");
+        assert.equal(response.output_text, "hf response");
+        assert.equal(response.responseFormat, "normalized");
+        assert.ok(getAllLLMProviderMetricsSnapshots().some((snapshot) => snapshot.provider === "huggingface"));
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+});
+
+test("startup validation returns a lightweight report for missing config", async () => {
+    const report = await validateProviderStartup({ provider: "huggingface", apiKey: "", model: "" });
+
+    assert.equal(report.ok, false);
+    assert.equal(report.authPresent, false);
+    assert.equal(report.modelConfigured, false);
+});
+
+test("provider recommendation helper returns a lightweight fallback plan", () => {
+    const recommendation = recommendProviderForTaskProfile("json");
+
+    assert.equal(recommendation.provider, "openai-compatible");
+    assert.equal(recommendation.fallbackProvider, "openai-compatible");
 });

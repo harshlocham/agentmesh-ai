@@ -116,7 +116,7 @@ export function parseJsonResponse<T>(response: LLMResponse): { value: T | null; 
 export function parseJsonWithSchema<T>(response: LLMResponse, schema: z.ZodSchema<T>): { value: T | null; text: string; responseFormat: NormalizedExtract["responseFormat"]; parseRepaired: boolean } {
     const parsed = parseJsonResponse<unknown>(response);
     if (parsed.value === null) {
-        return parsed;
+        return parsed as { value: T | null; text: string; responseFormat: NormalizedExtract["responseFormat"]; parseRepaired: boolean };
     }
 
     const validated = schema.safeParse(parsed.value);

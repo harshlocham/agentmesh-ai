@@ -68,6 +68,10 @@ export class OpenAIProvider extends BaseLLMProvider {
         return this.config.supportsStreaming ?? true;
     }
 
+    override supportsResponsesApi(): boolean {
+        return this.config.supportsResponsesApi ?? true;
+    }
+
     override supportsJsonMode(): boolean {
         return this.config.supportsJsonMode ?? true;
     }
@@ -107,6 +111,7 @@ export class OpenAIProvider extends BaseLLMProvider {
 
     async generate(request: LLMRequest, options?: LLMGenerateOptions): Promise<LLMResponse> {
         const requestId = options?.requestId ?? (request.metadata?.requestId as string | undefined) ?? `llm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const startedAt = Date.now();
         const timeoutMs = this.resolveTimeoutMs(options);
         const abortController = new AbortController();
         const timeoutHandle = setTimeout(() => abortController.abort(), timeoutMs);
@@ -124,28 +129,46 @@ export class OpenAIProvider extends BaseLLMProvider {
             });
         }
 
+        this.recordMetric({ provider: this.config.provider, event: "request" });
+
         try {
             let responseFormat: NonNullable<LLMResponse["responseFormat"]> = "responses";
             let response: unknown;
 
-            try {
-                response = await this.client.responses.create(
-                    {
-                        model: request.model,
-                        input: request.input as never,
-                        temperature: request.temperature,
-                        top_p: request.topP,
-                        max_output_tokens: request.maxOutputTokens,
-                    },
-                    { signal } as never
-                );
-            } catch (error) {
-                const retryableFallback = error instanceof Error && (/404|405|unsupported|not found/i.test(error.message));
-                if (!retryableFallback) {
-                    throw error;
-                }
+            if (this.supportsResponsesApi()) {
+                try {
+                    response = await this.client.responses.create(
+                        {
+                            model: request.model,
+                            input: request.input as never,
+                            temperature: request.temperature,
+                            top_p: request.topP,
+                            max_output_tokens: request.maxOutputTokens,
+                        },
+                        { signal } as never
+                    );
+                } catch (error) {
+                    const retryableFallback = error instanceof Error && (/404|405|unsupported|not found/i.test(error.message));
+                    if (!retryableFallback) {
+                        throw error;
+                    }
 
+                    responseFormat = "chat_completions";
+                    this.recordMetric({ provider: this.config.provider, event: "fallback" });
+                    response = await this.client.chat.completions.create(
+                        {
+                            model: request.model,
+                            messages: toChatMessages(request.input),
+                            temperature: request.temperature,
+                            top_p: request.topP,
+                            max_tokens: request.maxOutputTokens,
+                        },
+                        { signal } as never
+                    );
+                }
+            } else {
                 responseFormat = "chat_completions";
+                this.recordMetric({ provider: this.config.provider, event: "fallback" });
                 response = await this.client.chat.completions.create(
                     {
                         model: request.model,
@@ -174,6 +197,7 @@ export class OpenAIProvider extends BaseLLMProvider {
 
                 const chatNormalized = this.normalizeResponse(chatResponse, request, requestId, "chat_completions");
                 if (chatNormalized.output_text) {
+                    this.recordMetric({ provider: this.config.provider, event: "fallback" });
                     return chatNormalized;
                 }
             }
@@ -190,9 +214,19 @@ export class OpenAIProvider extends BaseLLMProvider {
                 });
             }
 
+            if (!llmResponse.output_text) {
+                this.recordMetric({ provider: this.config.provider, event: "malformed_response" });
+            }
+
+            this.recordMetric({ provider: this.config.provider, event: "success", latencyMs: Date.now() - startedAt });
+
             return llmResponse;
         } catch (error) {
             const normalized = this.normalizeError(error, requestId, timeoutMs);
+
+            if (normalized.category === "timeout") {
+                this.recordMetric({ provider: this.config.provider, event: "timeout" });
+            }
 
             if (this.shouldLogRequests()) {
                 console.info("llm:error", {
@@ -261,6 +295,18 @@ export class OpenAIProvider extends BaseLLMProvider {
             provider: this.config.provider,
             status,
             retryable,
+            category:
+                status === 401 || status === 403
+                    ? "auth"
+                    : status === 429
+                        ? "rate_limit"
+                        : /unsupported|capability/i.test(asError?.message ?? "")
+                            ? "unsupported_capability"
+                            : /json|parse|malformed/i.test(asError?.message ?? "")
+                                ? "malformed_response"
+                                : retryable
+                                    ? "retryable"
+                                    : "non_retryable",
             details: error,
             cause: error,
         });

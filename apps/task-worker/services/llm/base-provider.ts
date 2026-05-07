@@ -1,4 +1,5 @@
-import type { LLMGenerateOptions, LLMHealthCheckResult, LLMProviderConfig, LLMRequest, LLMResponse } from "./types.js";
+import type { LLMGenerateOptions, LLMHealthCheckResult, LLMProviderConfig, LLMProviderMetricSnapshot, LLMRequest, LLMResponse } from "./types.js";
+import { getLLMProviderMetricsSnapshot, recordLLMProviderMetric } from "./metrics.js";
 
 export abstract class BaseLLMProvider {
     protected readonly config: LLMProviderConfig;
@@ -9,6 +10,7 @@ export abstract class BaseLLMProvider {
 
     abstract generate(request: LLMRequest, options?: LLMGenerateOptions): Promise<LLMResponse>;
     abstract healthCheck(): Promise<LLMHealthCheckResult>;
+    abstract supportsResponsesApi(): boolean;
     abstract supportsStructuredOutputs(): boolean;
     abstract supportsToolCalling(): boolean;
     abstract supportsStreaming(): boolean;
@@ -24,5 +26,13 @@ export abstract class BaseLLMProvider {
 
     protected shouldLogRequests(): boolean {
         return this.config.logRequests ?? process.env.LLM_LOG_REQUESTS !== "false";
+    }
+
+    protected recordMetric(event: Parameters<typeof recordLLMProviderMetric>[0]) {
+        recordLLMProviderMetric(event);
+    }
+
+    getMetricSnapshot(): LLMProviderMetricSnapshot {
+        return getLLMProviderMetricsSnapshot(this.config.provider);
     }
 }

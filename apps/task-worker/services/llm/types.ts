@@ -34,13 +34,17 @@ export interface LLMResponse {
 }
 
 export interface LLMProviderConfig {
-    provider: "openai" | "openai-compatible";
+    provider: "openai" | "openai-compatible" | "huggingface" | "amd-openai-compatible";
     apiKey: string;
     baseUrl?: string;
     model?: string;
     timeoutMs?: number;
     logRequests?: boolean;
     defaultHeaders?: Record<string, string>;
+    providerProfile?: string;
+    providerDisplayName?: string;
+    transport?: "openai-compatible" | "inference-api";
+    supportsResponsesApi?: boolean;
     supportsStructuredOutputs?: boolean;
     supportsToolCalling?: boolean;
     supportsStreaming?: boolean;
@@ -140,5 +144,29 @@ export interface LLMHealthCheckResult {
     provider: string;
     latencyMs: number;
     model?: string;
+    error?: string;
+}
+
+export interface LLMProviderMetricSnapshot {
+    provider: string;
+    requestCount: number;
+    successCount: number;
+    timeoutCount: number;
+    fallbackCount: number;
+    malformedResponseCount: number;
+    repairCount: number;
+    totalLatencyMs: number;
+    lastRequestAt?: string;
+}
+
+export interface LLMProviderStartupReport {
+    provider: string;
+    model?: string;
+    ok: boolean;
+    reachable: boolean;
+    authPresent: boolean;
+    modelConfigured: boolean;
+    endpointShapeValid: boolean;
+    responseFormat?: string;
     error?: string;
 }
