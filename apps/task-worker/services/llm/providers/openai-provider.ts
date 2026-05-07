@@ -313,11 +313,11 @@ export class OpenAIProvider extends BaseLLMProvider {
                             ? "unsupported_capability"
                             : /json|parse|malformed/i.test(asError?.message ?? "")
                                 ? "malformed_response"
-                                    : /auth|api key|invalid prompt|bad request|unprocessable|validation/i.test(asError?.message ?? "")
+                                : /auth|api key|invalid prompt|bad request|unprocessable|validation/i.test(asError?.message ?? "")
                                     ? "non_retryable"
-                                : retryable
-                                    ? "retryable"
-                                    : "non_retryable",
+                                    : retryable
+                                        ? "retryable"
+                                        : "non_retryable",
             details: error,
             cause: error,
         });

@@ -750,90 +750,119 @@ Reply to confirm receipt or contact support if you have questions.
                 throw new Error(`Task not found: ${taskId}`);
             }
 
-        const action = await this.getLatestExecutionTaskAction(taskId);
-        if (!action) {
-            throw new Error(`No execution action found for task: ${taskId}`);
-        }
+            const action = await this.getLatestExecutionTaskAction(taskId);
+            if (!action) {
+                throw new Error(`No execution action found for task: ${taskId}`);
+            }
 
-        const context: LoopContext = {
-            task,
-            action: {
-                taskId: action.taskId.toString(),
-                conversationId: action.conversationId.toString(),
-                toolName: action.toolName ?? action.actionType,
-                parameters: action.parameters ?? {},
-                messageId: action.messageId ? action.messageId.toString() : null,
-                executionState: action.executionState ?? null,
-            },
-            retryCount: typeof task.retryCount === "number" ? task.retryCount : 0,
-            maxRetries: typeof task.maxRetries === "number" ? task.maxRetries : 2,
-            attemptPayload: {
-                taskId: action.taskId.toString(),
-                conversationId: action.conversationId.toString(),
-                toolName: action.toolName ?? action.actionType,
-                parameters: action.parameters ?? {},
-                messageId: action.messageId ? action.messageId.toString() : null,
-                executionState: action.executionState ?? null,
-            },
-            observed: null,
-            verification: null,
-        };
-        const availableTools = this.toolRegistry.listForLLM();
-        const maxIterations = Math.max(1, Number(process.env.TASK_AGENT_MAX_ITERATIONS || 5));
-        let iteration = 0;
-        let goalAchieved = false;
-        const iterationContext: IterationContextEntry[] = [];
+            const context: LoopContext = {
+                task,
+                action: {
+                    taskId: action.taskId.toString(),
+                    conversationId: action.conversationId.toString(),
+                    toolName: action.toolName ?? action.actionType,
+                    parameters: action.parameters ?? {},
+                    messageId: action.messageId ? action.messageId.toString() : null,
+                    executionState: action.executionState ?? null,
+                },
+                retryCount: typeof task.retryCount === "number" ? task.retryCount : 0,
+                maxRetries: typeof task.maxRetries === "number" ? task.maxRetries : 2,
+                attemptPayload: {
+                    taskId: action.taskId.toString(),
+                    conversationId: action.conversationId.toString(),
+                    toolName: action.toolName ?? action.actionType,
+                    parameters: action.parameters ?? {},
+                    messageId: action.messageId ? action.messageId.toString() : null,
+                    executionState: action.executionState ?? null,
+                },
+                observed: null,
+                verification: null,
+            };
+            const availableTools = this.toolRegistry.listForLLM();
+            const maxIterations = Math.max(1, Number(process.env.TASK_AGENT_MAX_ITERATIONS || 5));
+            let iteration = 0;
+            let goalAchieved = false;
+            const iterationContext: IterationContextEntry[] = [];
 
-        console.log("agent-runner lifecycle:start", {
-            taskId,
-            toolName: context.action.toolName,
-            retryCount: context.retryCount,
-            maxRetries: context.maxRetries,
-            maxIterations,
-        });
-
-        await this.updateTask(task, {
-            status: "executing",
-            retryCount: context.retryCount,
-            maxRetries: context.maxRetries,
-        });
-        await this.emitExecutionUpdate(task, {
-            state: "running",
-            summary: "Agent runner started.",
-            phase: "reason",
-            step: "run_task",
-            progress: 10,
-            details: {
-                toolName: context.action.toolName,
-            },
-        });
-
-        while (!goalAchieved && iteration < maxIterations && task.status !== "completed") {
-            iteration += 1;
-            console.log("agent-runner lifecycle:loop", {
+            console.log("agent-runner lifecycle:start", {
                 taskId,
-                iteration,
+                toolName: context.action.toolName,
+                retryCount: context.retryCount,
+                maxRetries: context.maxRetries,
                 maxIterations,
             });
 
-            try {
-                let decision: NextActionDecision;
-                try {
-                    decision = await this.decideNextAction(task, this.getExecutionHistory(task), availableTools, iterationContext);
-                } catch (err) {
-                    const message = err instanceof Error ? err.message : String(err);
-                    if (typeof message === "string" && message.startsWith("LLM_ERROR:")) {
-                        // LLM failed — do not execute any tool. Respect retry semantics.
-                        context.retryCount += 1;
-                        console.error("agent-runner llm:fatal", { taskId, reason: message, retryCount: context.retryCount });
+            await this.updateTask(task, {
+                status: "executing",
+                retryCount: context.retryCount,
+                maxRetries: context.maxRetries,
+            });
+            await this.emitExecutionUpdate(task, {
+                state: "running",
+                summary: "Agent runner started.",
+                phase: "reason",
+                step: "run_task",
+                progress: 10,
+                details: {
+                    toolName: context.action.toolName,
+                },
+            });
 
-                        if (context.retryCount <= context.maxRetries) {
-                            // schedule a retry and return control so orchestrator can requeue
+            while (!goalAchieved && iteration < maxIterations && task.status !== "completed") {
+                iteration += 1;
+                console.log("agent-runner lifecycle:loop", {
+                    taskId,
+                    iteration,
+                    maxIterations,
+                });
+
+                try {
+                    let decision: NextActionDecision;
+                    try {
+                        decision = await this.decideNextAction(task, this.getExecutionHistory(task), availableTools, iterationContext);
+                    } catch (err) {
+                        const message = err instanceof Error ? err.message : String(err);
+                        if (typeof message === "string" && message.startsWith("LLM_ERROR:")) {
+                            // LLM failed — do not execute any tool. Respect retry semantics.
+                            context.retryCount += 1;
+                            console.error("agent-runner llm:fatal", { taskId, reason: message, retryCount: context.retryCount });
+
+                            if (context.retryCount <= context.maxRetries) {
+                                // schedule a retry and return control so orchestrator can requeue
+                                await this.updateTask(task, {
+                                    lifecycleState: "retry_scheduled",
+                                    status: "partial",
+                                    retryCount: context.retryCount,
+                                    maxRetries: context.maxRetries,
+                                });
+
+                                await this.appendCheckpoint(task, {
+                                    step: "failed",
+                                    status: "completed",
+                                    progress: 100,
+                                });
+
+                                return {
+                                    completed: false,
+                                    retryCount: context.retryCount,
+                                    maxRetries: context.maxRetries,
+                                    result: context.observed,
+                                    verification: context.verification,
+                                };
+                            }
+
+                            // exceeded retries -> move to dead-letter (failed)
                             await this.updateTask(task, {
-                                lifecycleState: "retry_scheduled",
-                                status: "partial",
+                                status: "failed",
                                 retryCount: context.retryCount,
                                 maxRetries: context.maxRetries,
+                                progress: 100,
+                                result: {
+                                    success: false,
+                                    confidence: 0,
+                                    evidence: { reason: message },
+                                    error: message,
+                                },
                             });
 
                             await this.appendCheckpoint(task, {
@@ -851,17 +880,35 @@ Reply to confirm receipt or contact support if you have questions.
                             };
                         }
 
-                        // exceeded retries -> move to dead-letter (failed)
+                        throw err;
+                    }
+                    await this.emitExecutionUpdate(task, {
+                        state: "running",
+                        summary: decision.reasoning ?? "Selected next action.",
+                        phase: "reason",
+                        step: "decide_next_action",
+                        progress: 20,
+                        details: {
+                            reasoning: decision.reasoning ?? null,
+                            toolName: decision.toolName ?? undefined,
+                            toolInput: decision.toolInput,
+                        },
+                    });
+                    if (decision.needsClarification) {
                         await this.updateTask(task, {
-                            status: "failed",
-                            retryCount: context.retryCount,
-                            maxRetries: context.maxRetries,
+                            status: "waiting_for_input",
+                            lifecycleState: "paused",
+                            pausedReason: decision.clarificationQuestion ?? decision.reasoning ?? "Clarification required.",
+                            blockedReason: decision.clarificationQuestion ?? "Awaiting clarification.",
                             progress: 100,
                             result: {
                                 success: false,
                                 confidence: 0,
-                                evidence: { reason: message },
-                                error: message,
+                                evidence: {
+                                    needsClarification: true,
+                                    clarificationQuestion: decision.clarificationQuestion ?? null,
+                                },
+                                error: decision.reasoning ?? "Execution paused: clarification required.",
                             },
                         });
 
@@ -869,6 +916,19 @@ Reply to confirm receipt or contact support if you have questions.
                             step: "failed",
                             status: "completed",
                             progress: 100,
+                        });
+                        await this.emitExecutionUpdate(task, {
+                            state: "blocked",
+                            summary: "Execution paused; clarification required.",
+                            error: null,
+                            phase: "reason",
+                            step: "needs_clarification",
+                            progress: typeof task.progress === "number" ? task.progress : 0,
+                            details: {
+                                reasoning: decision.reasoning ?? null,
+                                toolName: decision.toolName,
+                                toolInput: Object.assign({}, decision.toolInput ?? {}, { _clarificationQuestion: decision.clarificationQuestion ?? null }),
+                            },
                         });
 
                         return {
@@ -880,298 +940,170 @@ Reply to confirm receipt or contact support if you have questions.
                         };
                     }
 
-                    throw err;
-                }
-                await this.emitExecutionUpdate(task, {
-                    state: "running",
-                    summary: decision.reasoning ?? "Selected next action.",
-                    phase: "reason",
-                    step: "decide_next_action",
-                    progress: 20,
-                    details: {
-                        reasoning: decision.reasoning ?? null,
-                        toolName: decision.toolName ?? undefined,
-                        toolInput: decision.toolInput,
-                    },
-                });
-                if (decision.needsClarification) {
-                    await this.updateTask(task, {
-                        status: "waiting_for_input",
-                        lifecycleState: "paused",
-                        pausedReason: decision.clarificationQuestion ?? decision.reasoning ?? "Clarification required.",
-                        blockedReason: decision.clarificationQuestion ?? "Awaiting clarification.",
-                        progress: 100,
-                        result: {
-                            success: false,
-                            confidence: 0,
-                            evidence: {
-                                needsClarification: true,
-                                clarificationQuestion: decision.clarificationQuestion ?? null,
-                            },
-                            error: decision.reasoning ?? "Execution paused: clarification required.",
-                        },
-                    });
-
-                    await this.appendCheckpoint(task, {
-                        step: "failed",
-                        status: "completed",
-                        progress: 100,
-                    });
-                    await this.emitExecutionUpdate(task, {
-                        state: "blocked",
-                        summary: "Execution paused; clarification required.",
-                        error: null,
-                        phase: "reason",
-                        step: "needs_clarification",
-                        progress: typeof task.progress === "number" ? task.progress : 0,
-                        details: {
-                            reasoning: decision.reasoning ?? null,
-                            toolName: decision.toolName,
-                            toolInput: Object.assign({}, decision.toolInput ?? {}, { _clarificationQuestion: decision.clarificationQuestion ?? null }),
-                        },
-                    });
-
-                    return {
-                        completed: false,
-                        retryCount: context.retryCount,
-                        maxRetries: context.maxRetries,
-                        result: context.observed,
-                        verification: context.verification,
-                    };
-                }
-
-                if (decision.noAction || decision.goalAchieved) {
-                    goalAchieved = true;
-                    await this.updateTask(task, {
-                        status: "completed",
-                        progress: 100,
-                        result: {
-                            success: true,
-                            confidence: context.verification?.confidence ?? 1,
-                            evidence: {
-                                decision,
-                                execution: context.observed?.evidence ?? null,
-                            },
-                        },
-                    });
-
-                    await this.appendCheckpoint(task, {
-                        step: "done",
-                        status: "completed",
-                        progress: 100,
-                    });
-                    await this.emitExecutionUpdate(task, {
-                        state: "succeeded",
-                        summary: decision.reasoning ?? "Goal achieved without additional tool execution.",
-                        phase: "finalize",
-                        step: "goal_achieved",
-                        progress: 100,
-                        details: {
-                            reasoning: decision.reasoning ?? null,
-                            toolName: decision.toolName,
-                            toolInput: decision.toolInput,
-                            verification: context.verification
-                                ? {
-                                    success: context.verification.success,
-                                    confidence: context.verification.confidence,
-                                }
-                                : null,
-                        },
-                    });
-
-                    return {
-                        completed: true,
-                        retryCount: context.retryCount,
-                        maxRetries: context.maxRetries,
-                        result: context.observed,
-                        verification: context.verification,
-                    };
-                }
-
-                const selectedToolName = decision.toolName ?? "none";
-
-                context.attemptPayload = {
-                    ...context.attemptPayload,
-                    toolName: selectedToolName,
-                    parameters: decision.toolInput,
-                };
-                context.action = context.attemptPayload;
-
-                if (decision.reasoning) {
-                    console.log("agent-runner step:decide", {
-                        taskId,
-                        toolName: selectedToolName,
-                        reasoning: decision.reasoning,
-                    });
-                }
-
-                iterationContext.push({
-                    iteration,
-                    decision: {
-                        toolName: decision.toolName,
-                        reasoning: decision.reasoning,
-                        noAction: decision.noAction,
-                        needsClarification: decision.needsClarification,
-                    },
-                });
-
-                await this.appendCheckpoint(task, {
-                    step: "execute",
-                    status: "started",
-                    historyDelta: { attempts: 1 },
-                });
-                await this.emitExecutionUpdate(task, {
-                    state: "running",
-                    summary: `Executing tool '${context.attemptPayload.toolName}'.`,
-                    phase: "tool_execute",
-                    step: "execute_tool",
-                    progress: 35,
-                    details: {
-                        reasoning: decision.reasoning ?? null,
-                        toolName: context.attemptPayload.toolName,
-                        toolInput: context.attemptPayload.parameters,
-                    },
-                });
-
-                const executed = await this.execute({
-                    ...context.attemptPayload,
-                    stepId: context.action.toolName,
-                    attempt: context.retryCount + 1,
-                    idempotencyKey: this.buildIdempotencyKey(taskId, context.action.toolName, context.retryCount + 1),
-                });
-
-                await this.appendCheckpoint(task, {
-                    step: "execute",
-                    status: "completed",
-                });
-
-                await this.appendCheckpoint(task, {
-                    step: "observe",
-                    status: "started",
-                });
-                await this.emitExecutionUpdate(task, {
-                    state: "running",
-                    summary: "Observing tool execution output.",
-                    phase: "observe",
-                    step: "observe_result",
-                    progress: 55,
-                    details: {
-                        toolName: context.attemptPayload.toolName,
-                        toolOutput: this.summarizeEvidence(executed.evidence),
-                    },
-                });
-
-                context.observed = await this.observe(context, executed);
-
-                const currentContext = iterationContext[iterationContext.length - 1];
-                if (currentContext) {
-                    currentContext.result = {
-                        summary: context.observed.summary,
-                        adapterSuccess: context.observed.adapterSuccess,
-                        error: context.observed.error,
-                    };
-                }
-
-                await this.appendCheckpoint(task, {
-                    step: "observe",
-                    status: "completed",
-                });
-
-                await this.appendCheckpoint(task, {
-                    step: "verify",
-                    status: "started",
-                });
-                await this.emitExecutionUpdate(task, {
-                    state: "running",
-                    summary: "Verifying execution outcome.",
-                    phase: "verify",
-                    step: "verify_result",
-                    progress: 75,
-                    details: {
-                        toolName: context.attemptPayload.toolName,
-                        toolOutput: this.summarizeEvidence(context.observed?.evidence),
-                    },
-                });
-
-                context.verification = await this.verify(context.observed, context);
-                await this.emitExecutionUpdate(task, {
-                    state: context.verification.success ? "running" : "failed",
-                    summary: context.verification.success ? "Verification passed." : "Verification failed.",
-                    error: context.verification.success ? null : (context.observed?.error ?? "Verification failed"),
-                    phase: "verify",
-                    step: "verification_completed",
-                    progress: context.verification.success ? 85 : 80,
-                    details: {
-                        toolName: context.attemptPayload.toolName,
-                        toolOutput: this.summarizeEvidence(context.observed?.evidence),
-                        verification: {
-                            success: context.verification.success,
-                            confidence: context.verification.confidence,
-                        },
-                    },
-                });
-
-                if (context.verification.success) {
-                    await this.appendCheckpoint(task, {
-                        step: "verify",
-                        status: "completed",
-                        historyDelta: {
-                            appendResult: {
-                                attempt: context.retryCount + 1,
+                    if (decision.noAction || decision.goalAchieved) {
+                        goalAchieved = true;
+                        await this.updateTask(task, {
+                            status: "completed",
+                            progress: 100,
+                            result: {
                                 success: true,
-                                summary: context.observed.summary,
-                                validationLog: context.verification.validationLog,
+                                confidence: context.verification?.confidence ?? 1,
+                                evidence: {
+                                    decision,
+                                    execution: context.observed?.evidence ?? null,
+                                },
                             },
-                        },
-                    });
-                } else {
-                    await this.appendCheckpoint(task, {
-                        step: "verify",
-                        status: "failed",
-                        historyDelta: {
-                            failures: 1,
-                            appendResult: {
-                                attempt: context.retryCount + 1,
-                                success: false,
-                                summary: context.observed.summary,
-                                error: context.observed.error ?? "Verification failed",
-                                validationLog: context.verification.validationLog,
-                            },
-                        },
-                    });
-                }
+                        });
 
-                if (context.verification.success) {
-                    await this.updateTask(task, {
-                        status: "completed",
-                        retryCount: context.retryCount,
-                        maxRetries: context.maxRetries,
-                        progress: 100,
-                        result: {
-                            success: true,
-                            confidence: context.verification.confidence,
-                            evidence: {
-                                execution: context.observed.evidence,
-                                validationLog: context.verification.validationLog,
+                        await this.appendCheckpoint(task, {
+                            step: "done",
+                            status: "completed",
+                            progress: 100,
+                        });
+                        await this.emitExecutionUpdate(task, {
+                            state: "succeeded",
+                            summary: decision.reasoning ?? "Goal achieved without additional tool execution.",
+                            phase: "finalize",
+                            step: "goal_achieved",
+                            progress: 100,
+                            details: {
+                                reasoning: decision.reasoning ?? null,
+                                toolName: decision.toolName,
+                                toolInput: decision.toolInput,
+                                verification: context.verification
+                                    ? {
+                                        success: context.verification.success,
+                                        confidence: context.verification.confidence,
+                                    }
+                                    : null,
                             },
+                        });
+
+                        return {
+                            completed: true,
+                            retryCount: context.retryCount,
+                            maxRetries: context.maxRetries,
+                            result: context.observed,
+                            verification: context.verification,
+                        };
+                    }
+
+                    const selectedToolName = decision.toolName ?? "none";
+
+                    context.attemptPayload = {
+                        ...context.attemptPayload,
+                        toolName: selectedToolName,
+                        parameters: decision.toolInput,
+                    };
+                    context.action = context.attemptPayload;
+
+                    if (decision.reasoning) {
+                        console.log("agent-runner step:decide", {
+                            taskId,
+                            toolName: selectedToolName,
+                            reasoning: decision.reasoning,
+                        });
+                    }
+
+                    iterationContext.push({
+                        iteration,
+                        decision: {
+                            toolName: decision.toolName,
+                            reasoning: decision.reasoning,
+                            noAction: decision.noAction,
+                            needsClarification: decision.needsClarification,
                         },
                     });
 
                     await this.appendCheckpoint(task, {
-                        step: "done",
-                        status: "completed",
-                        progress: 100,
+                        step: "execute",
+                        status: "started",
+                        historyDelta: { attempts: 1 },
                     });
                     await this.emitExecutionUpdate(task, {
-                        state: "succeeded",
-                        summary: context.observed.summary,
-                        phase: "finalize",
-                        step: "task_completed",
-                        progress: 100,
+                        state: "running",
+                        summary: `Executing tool '${context.attemptPayload.toolName}'.`,
+                        phase: "tool_execute",
+                        step: "execute_tool",
+                        progress: 35,
                         details: {
+                            reasoning: decision.reasoning ?? null,
                             toolName: context.attemptPayload.toolName,
                             toolInput: context.attemptPayload.parameters,
-                            toolOutput: this.summarizeEvidence(context.observed.evidence),
+                        },
+                    });
+
+                    const executed = await this.execute({
+                        ...context.attemptPayload,
+                        stepId: context.action.toolName,
+                        attempt: context.retryCount + 1,
+                        idempotencyKey: this.buildIdempotencyKey(taskId, context.action.toolName, context.retryCount + 1),
+                    });
+
+                    await this.appendCheckpoint(task, {
+                        step: "execute",
+                        status: "completed",
+                    });
+
+                    await this.appendCheckpoint(task, {
+                        step: "observe",
+                        status: "started",
+                    });
+                    await this.emitExecutionUpdate(task, {
+                        state: "running",
+                        summary: "Observing tool execution output.",
+                        phase: "observe",
+                        step: "observe_result",
+                        progress: 55,
+                        details: {
+                            toolName: context.attemptPayload.toolName,
+                            toolOutput: this.summarizeEvidence(executed.evidence),
+                        },
+                    });
+
+                    context.observed = await this.observe(context, executed);
+
+                    const currentContext = iterationContext[iterationContext.length - 1];
+                    if (currentContext) {
+                        currentContext.result = {
+                            summary: context.observed.summary,
+                            adapterSuccess: context.observed.adapterSuccess,
+                            error: context.observed.error,
+                        };
+                    }
+
+                    await this.appendCheckpoint(task, {
+                        step: "observe",
+                        status: "completed",
+                    });
+
+                    await this.appendCheckpoint(task, {
+                        step: "verify",
+                        status: "started",
+                    });
+                    await this.emitExecutionUpdate(task, {
+                        state: "running",
+                        summary: "Verifying execution outcome.",
+                        phase: "verify",
+                        step: "verify_result",
+                        progress: 75,
+                        details: {
+                            toolName: context.attemptPayload.toolName,
+                            toolOutput: this.summarizeEvidence(context.observed?.evidence),
+                        },
+                    });
+
+                    context.verification = await this.verify(context.observed, context);
+                    await this.emitExecutionUpdate(task, {
+                        state: context.verification.success ? "running" : "failed",
+                        summary: context.verification.success ? "Verification passed." : "Verification failed.",
+                        error: context.verification.success ? null : (context.observed?.error ?? "Verification failed"),
+                        phase: "verify",
+                        step: "verification_completed",
+                        progress: context.verification.success ? 85 : 80,
+                        details: {
+                            toolName: context.attemptPayload.toolName,
+                            toolOutput: this.summarizeEvidence(context.observed?.evidence),
                             verification: {
                                 success: context.verification.success,
                                 confidence: context.verification.confidence,
@@ -1179,187 +1111,255 @@ Reply to confirm receipt or contact support if you have questions.
                         },
                     });
 
-                    console.log("agent-runner lifecycle:completed", {
+                    if (context.verification.success) {
+                        await this.appendCheckpoint(task, {
+                            step: "verify",
+                            status: "completed",
+                            historyDelta: {
+                                appendResult: {
+                                    attempt: context.retryCount + 1,
+                                    success: true,
+                                    summary: context.observed.summary,
+                                    validationLog: context.verification.validationLog,
+                                },
+                            },
+                        });
+                    } else {
+                        await this.appendCheckpoint(task, {
+                            step: "verify",
+                            status: "failed",
+                            historyDelta: {
+                                failures: 1,
+                                appendResult: {
+                                    attempt: context.retryCount + 1,
+                                    success: false,
+                                    summary: context.observed.summary,
+                                    error: context.observed.error ?? "Verification failed",
+                                    validationLog: context.verification.validationLog,
+                                },
+                            },
+                        });
+                    }
+
+                    if (context.verification.success) {
+                        await this.updateTask(task, {
+                            status: "completed",
+                            retryCount: context.retryCount,
+                            maxRetries: context.maxRetries,
+                            progress: 100,
+                            result: {
+                                success: true,
+                                confidence: context.verification.confidence,
+                                evidence: {
+                                    execution: context.observed.evidence,
+                                    validationLog: context.verification.validationLog,
+                                },
+                            },
+                        });
+
+                        await this.appendCheckpoint(task, {
+                            step: "done",
+                            status: "completed",
+                            progress: 100,
+                        });
+                        await this.emitExecutionUpdate(task, {
+                            state: "succeeded",
+                            summary: context.observed.summary,
+                            phase: "finalize",
+                            step: "task_completed",
+                            progress: 100,
+                            details: {
+                                toolName: context.attemptPayload.toolName,
+                                toolInput: context.attemptPayload.parameters,
+                                toolOutput: this.summarizeEvidence(context.observed.evidence),
+                                verification: {
+                                    success: context.verification.success,
+                                    confidence: context.verification.confidence,
+                                },
+                            },
+                        });
+
+                        console.log("agent-runner lifecycle:completed", {
+                            taskId,
+                            confidence: context.verification.confidence,
+                        });
+                        return {
+                            completed: true,
+                            retryCount: context.retryCount,
+                            maxRetries: context.maxRetries,
+                            result: context.observed,
+                            verification: context.verification,
+                        };
+                    }
+
+                    context.retryCount += 1;
+
+                    console.warn("agent-runner lifecycle:continue", {
                         taskId,
-                        confidence: context.verification.confidence,
+                        iteration,
+                        reason: context.observed.error ?? "verification failed",
                     });
-                    return {
-                        completed: true,
-                        retryCount: context.retryCount,
-                        maxRetries: context.maxRetries,
-                        result: context.observed,
-                        verification: context.verification,
-                    };
-                }
 
-                context.retryCount += 1;
-
-                console.warn("agent-runner lifecycle:continue", {
-                    taskId,
-                    iteration,
-                    reason: context.observed.error ?? "verification failed",
-                });
-
-                await this.updateTask(task, {
-                    status: "executing",
-                    retryCount: context.retryCount,
-                    maxRetries: context.maxRetries,
-                });
-                await this.emitExecutionUpdate(task, {
-                    state: "running",
-                    summary: "Verification failed; preparing next iteration.",
-                    error: context.observed.error ?? "verification failed",
-                    phase: "reason",
-                    step: "retry_iteration",
-                    progress: 60,
-                    details: {
-                        toolName: context.attemptPayload.toolName,
-                        toolOutput: context.observed.evidence,
-                    },
-                });
-            } catch (error) {
-                const reason = error instanceof Error ? error.message : "unknown execution error";
-
-                if (/abort|timed out|lease lost/i.test(reason)) {
                     await this.updateTask(task, {
-                        status: "failed",
+                        status: "executing",
                         retryCount: context.retryCount,
                         maxRetries: context.maxRetries,
-                        progress: 100,
-                        result: {
-                            success: false,
-                            confidence: 0,
-                            evidence: { reason },
+                    });
+                    await this.emitExecutionUpdate(task, {
+                        state: "running",
+                        summary: "Verification failed; preparing next iteration.",
+                        error: context.observed.error ?? "verification failed",
+                        phase: "reason",
+                        step: "retry_iteration",
+                        progress: 60,
+                        details: {
+                            toolName: context.attemptPayload.toolName,
+                            toolOutput: context.observed.evidence,
+                        },
+                    });
+                } catch (error) {
+                    const reason = error instanceof Error ? error.message : "unknown execution error";
+
+                    if (/abort|timed out|lease lost/i.test(reason)) {
+                        await this.updateTask(task, {
+                            status: "failed",
+                            retryCount: context.retryCount,
+                            maxRetries: context.maxRetries,
+                            progress: 100,
+                            result: {
+                                success: false,
+                                confidence: 0,
+                                evidence: { reason },
+                                error: reason,
+                            },
+                        });
+
+                        await this.appendCheckpoint(task, {
+                            step: "failed",
+                            status: "completed",
+                            progress: 100,
+                        });
+
+                        await this.emitExecutionUpdate(task, {
+                            state: "failed",
+                            summary: reason,
                             error: reason,
+                            phase: "tool_execute",
+                            step: "iteration_aborted",
+                            progress: 100,
+                            details: {
+                                toolName: context.attemptPayload.toolName,
+                                toolInput: context.attemptPayload.parameters,
+                            },
+                        });
+
+                        return {
+                            completed: false,
+                            retryCount: context.retryCount,
+                            maxRetries: context.maxRetries,
+                            result: context.observed,
+                            verification: context.verification,
+                        };
+                    }
+
+                    // Generic non-LLM error: record observation and increment retry count
+                    await this.appendCheckpoint(task, {
+                        step: "execute",
+                        status: "failed",
+                        historyDelta: {
+                            failures: 1,
+                            appendResult: {
+                                attempt: context.retryCount + 1,
+                                success: false,
+                                summary: "Execution failed before verification",
+                                error: reason,
+                            },
                         },
                     });
 
-                    await this.appendCheckpoint(task, {
-                        step: "failed",
-                        status: "completed",
-                        progress: 100,
+                    context.observed = {
+                        summary: "Execution failed before verification",
+                        adapterSuccess: false,
+                        evidence: {
+                            reason,
+                            iteration,
+                        },
+                        error: reason,
+                    };
+
+                    context.retryCount += 1;
+
+                    console.warn("agent-runner lifecycle:iteration-error", {
+                        taskId,
+                        reason,
+                        retryCount: context.retryCount,
+                        maxRetries: context.maxRetries,
                     });
 
+                    await this.updateTask(task, {
+                        status: "executing",
+                        retryCount: context.retryCount,
+                        maxRetries: context.maxRetries,
+                    });
                     await this.emitExecutionUpdate(task, {
                         state: "failed",
-                        summary: reason,
+                        summary: "Execution iteration failed.",
                         error: reason,
                         phase: "tool_execute",
-                        step: "iteration_aborted",
-                        progress: 100,
+                        step: "iteration_exception",
+                        progress: 50,
                         details: {
                             toolName: context.attemptPayload.toolName,
                             toolInput: context.attemptPayload.parameters,
                         },
                     });
-
-                    return {
-                        completed: false,
-                        retryCount: context.retryCount,
-                        maxRetries: context.maxRetries,
-                        result: context.observed,
-                        verification: context.verification,
-                    };
                 }
-
-                // Generic non-LLM error: record observation and increment retry count
-                await this.appendCheckpoint(task, {
-                    step: "execute",
-                    status: "failed",
-                    historyDelta: {
-                        failures: 1,
-                        appendResult: {
-                            attempt: context.retryCount + 1,
-                            success: false,
-                            summary: "Execution failed before verification",
-                            error: reason,
-                        },
-                    },
-                });
-
-                context.observed = {
-                    summary: "Execution failed before verification",
-                    adapterSuccess: false,
-                    evidence: {
-                        reason,
-                        iteration,
-                    },
-                    error: reason,
-                };
-
-                context.retryCount += 1;
-
-                console.warn("agent-runner lifecycle:iteration-error", {
-                    taskId,
-                    reason,
-                    retryCount: context.retryCount,
-                    maxRetries: context.maxRetries,
-                });
-
-                await this.updateTask(task, {
-                    status: "executing",
-                    retryCount: context.retryCount,
-                    maxRetries: context.maxRetries,
-                });
-                await this.emitExecutionUpdate(task, {
-                    state: "failed",
-                    summary: "Execution iteration failed.",
-                    error: reason,
-                    phase: "tool_execute",
-                    step: "iteration_exception",
-                    progress: 50,
-                    details: {
-                        toolName: context.attemptPayload.toolName,
-                        toolInput: context.attemptPayload.parameters,
-                    },
-                });
             }
-        }
 
-        await this.updateTask(task, {
-            status: "failed",
-            retryCount: context.retryCount,
-            maxRetries: context.maxRetries,
-            progress: 100,
-            result: {
-                success: false,
-                confidence: context.verification?.confidence ?? 0,
-                evidence: context.observed?.evidence ?? null,
+            await this.updateTask(task, {
+                status: "failed",
+                retryCount: context.retryCount,
+                maxRetries: context.maxRetries,
+                progress: 100,
+                result: {
+                    success: false,
+                    confidence: context.verification?.confidence ?? 0,
+                    evidence: context.observed?.evidence ?? null,
+                    error: "Max iterations reached before goal achievement.",
+                },
+            });
+
+            await this.appendCheckpoint(task, {
+                step: "failed",
+                status: "completed",
+                progress: 100,
+            });
+            await this.emitExecutionUpdate(task, {
+                state: "failed",
+                summary: "Max iterations reached before goal achievement.",
                 error: "Max iterations reached before goal achievement.",
-            },
-        });
+                phase: "finalize",
+                step: "max_iterations_reached",
+                progress: 100,
+                details: {
+                    toolName: context.attemptPayload.toolName,
+                    toolInput: context.attemptPayload.parameters,
+                    toolOutput: this.summarizeEvidence(context.observed?.evidence),
+                    verification: context.verification
+                        ? {
+                            success: context.verification.success,
+                            confidence: context.verification.confidence,
+                        }
+                        : null,
+                },
+            });
 
-        await this.appendCheckpoint(task, {
-            step: "failed",
-            status: "completed",
-            progress: 100,
-        });
-        await this.emitExecutionUpdate(task, {
-            state: "failed",
-            summary: "Max iterations reached before goal achievement.",
-            error: "Max iterations reached before goal achievement.",
-            phase: "finalize",
-            step: "max_iterations_reached",
-            progress: 100,
-            details: {
-                toolName: context.attemptPayload.toolName,
-                toolInput: context.attemptPayload.parameters,
-                toolOutput: this.summarizeEvidence(context.observed?.evidence),
-                verification: context.verification
-                    ? {
-                        success: context.verification.success,
-                        confidence: context.verification.confidence,
-                    }
-                    : null,
-            },
-        });
-
-        console.log("agent-runner lifecycle:exhausted", {
-            taskId,
-            retryCount: context.retryCount,
-            maxRetries: context.maxRetries,
-            maxIterations,
-        });
+            console.log("agent-runner lifecycle:exhausted", {
+                taskId,
+                retryCount: context.retryCount,
+                maxRetries: context.maxRetries,
+                maxIterations,
+            });
 
             return {
                 completed: false,
@@ -1734,87 +1734,87 @@ Reply to confirm receipt or contact support if you have questions.
                     let decision: NextActionDecision;
                     try {
                         decision = await this.decideStepAction({
-                        task: latestTask,
-                        step,
-                        rankedTools,
-                        shortTermMemory: memory.shortTerm as Array<Record<string, unknown>>,
-                        longTermMemory: memory.longTerm as Array<Record<string, unknown>>,
-                        previousStepOutputs,
-                        clarificationReply,
-                        previousError: step.lastError ?? null,
-                        previousParameters: (step.input ?? null) as Record<string, unknown> | null,
+                            task: latestTask,
+                            step,
+                            rankedTools,
+                            shortTermMemory: memory.shortTerm as Array<Record<string, unknown>>,
+                            longTermMemory: memory.longTerm as Array<Record<string, unknown>>,
+                            previousStepOutputs,
+                            clarificationReply,
+                            previousError: step.lastError ?? null,
+                            previousParameters: (step.input ?? null) as Record<string, unknown> | null,
                             iteration,
                         });
                     } catch (err) {
-                    const message = err instanceof Error ? err.message : String(err);
-                    if (typeof message === "string" && message.startsWith("LLM_ERROR:")) {
-                        // Do not execute any tool. Respect retry semantics for persistent loop.
-                        const currentRetry = typeof latestTask.retryCount === "number" ? latestTask.retryCount + 1 : 1;
-                        await this.updateTask(latestTask, {
-                            lifecycleState: currentRetry <= (latestTask.maxRetries ?? 2) ? "retry_scheduled" : "failed",
-                            status: currentRetry <= (latestTask.maxRetries ?? 2) ? "partial" : "failed",
-                            retryCount: currentRetry,
-                            maxRetries: latestTask.maxRetries ?? 2,
-                        });
-
-                        await this.updatePlanStepState(taskId, step.stepId, {
-                            state: currentRetry <= (step.maxAttempts ?? 3) ? "retry_scheduled" : "failed",
-                            lastError: message,
-                        });
-
-                        console.error("agent-runner llm:step-failure", { taskId, stepId: step.stepId, message });
-
-                        if (currentRetry <= (latestTask.maxRetries ?? 2)) {
-                            // break out to allow scheduler to retry later
-                            await this.appendCheckpoint(latestTask, { step: "failed", status: "completed" });
-                            await this.releaseTaskLeaseFn(taskId, this.workerId);
-                            return {
-                                completed: false,
+                        const message = err instanceof Error ? err.message : String(err);
+                        if (typeof message === "string" && message.startsWith("LLM_ERROR:")) {
+                            // Do not execute any tool. Respect retry semantics for persistent loop.
+                            const currentRetry = typeof latestTask.retryCount === "number" ? latestTask.retryCount + 1 : 1;
+                            await this.updateTask(latestTask, {
+                                lifecycleState: currentRetry <= (latestTask.maxRetries ?? 2) ? "retry_scheduled" : "failed",
+                                status: currentRetry <= (latestTask.maxRetries ?? 2) ? "partial" : "failed",
                                 retryCount: currentRetry,
                                 maxRetries: latestTask.maxRetries ?? 2,
-                                result: null,
-                                verification: null,
-                            };
+                            });
+
+                            await this.updatePlanStepState(taskId, step.stepId, {
+                                state: currentRetry <= (step.maxAttempts ?? 3) ? "retry_scheduled" : "failed",
+                                lastError: message,
+                            });
+
+                            console.error("agent-runner llm:step-failure", { taskId, stepId: step.stepId, message });
+
+                            if (currentRetry <= (latestTask.maxRetries ?? 2)) {
+                                // break out to allow scheduler to retry later
+                                await this.appendCheckpoint(latestTask, { step: "failed", status: "completed" });
+                                await this.releaseTaskLeaseFn(taskId, this.workerId);
+                                return {
+                                    completed: false,
+                                    retryCount: currentRetry,
+                                    maxRetries: latestTask.maxRetries ?? 2,
+                                    result: null,
+                                    verification: null,
+                                };
+                            }
+
+                            // exceeded retries -> fail the task
+                            await this.appendCheckpoint(latestTask, { step: "failed", status: "completed" });
+                            await this.transitionLifecycle(latestTask, "failed");
+                            break;
                         }
 
-                        // exceeded retries -> fail the task
-                        await this.appendCheckpoint(latestTask, { step: "failed", status: "completed" });
+                        throw err;
+                    }
+
+                    if (decision.needsClarification) {
+                        const clarificationQuestion = decision.clarificationQuestion ?? "Please provide more details.";
+                        await this.updatePlanStepState(taskId, step.stepId, {
+                            state: "blocked",
+                            lastError: clarificationQuestion,
+                            output: {
+                                summary: "Clarification required",
+                                data: { clarificationQuestion },
+                            },
+                        });
+
+                        await this.pauseForClarification(latestTask, clarificationQuestion, step.stepId);
+                        return {
+                            completed: false,
+                            retryCount: typeof latestTask.retryCount === "number" ? latestTask.retryCount : 0,
+                            maxRetries: typeof latestTask.maxRetries === "number" ? latestTask.maxRetries : 2,
+                            result: lastResult,
+                            verification: lastVerification,
+                        };
+                    }
+
+                    if (!decision.toolName || decision.toolName === "none") {
+                        await this.updatePlanStepState(taskId, step.stepId, {
+                            state: "failed",
+                            lastError: "LLM returned no executable tool.",
+                        });
                         await this.transitionLifecycle(latestTask, "failed");
                         break;
                     }
-
-                    throw err;
-                }
-
-                    if (decision.needsClarification) {
-                    const clarificationQuestion = decision.clarificationQuestion ?? "Please provide more details.";
-                    await this.updatePlanStepState(taskId, step.stepId, {
-                        state: "blocked",
-                        lastError: clarificationQuestion,
-                        output: {
-                            summary: "Clarification required",
-                            data: { clarificationQuestion },
-                        },
-                    });
-
-                    await this.pauseForClarification(latestTask, clarificationQuestion, step.stepId);
-                    return {
-                        completed: false,
-                        retryCount: typeof latestTask.retryCount === "number" ? latestTask.retryCount : 0,
-                        maxRetries: typeof latestTask.maxRetries === "number" ? latestTask.maxRetries : 2,
-                        result: lastResult,
-                        verification: lastVerification,
-                    };
-                }
-
-                    if (!decision.toolName || decision.toolName === "none") {
-                    await this.updatePlanStepState(taskId, step.stepId, {
-                        state: "failed",
-                        lastError: "LLM returned no executable tool.",
-                    });
-                    await this.transitionLifecycle(latestTask, "failed");
-                    break;
-                }
 
                     const selectedTool = this.toolRegistry.get(decision.toolName);
                     if (!selectedTool) {
@@ -1824,27 +1824,27 @@ Reply to confirm receipt or contact support if you have questions.
                     const resolvedInput = resolveStepTemplates(step.input ?? {}, previousStepOutputs);
                     const resolvedDecisionInput = resolveStepTemplates(decision.toolInput, previousStepOutputs);
                     const mergedInput = {
-                    ...(resolvedInput && typeof resolvedInput === "object" ? resolvedInput as Record<string, unknown> : {}),
-                    ...(resolvedDecisionInput && typeof resolvedDecisionInput === "object" ? resolvedDecisionInput as Record<string, unknown> : {}),
-                };
+                        ...(resolvedInput && typeof resolvedInput === "object" ? resolvedInput as Record<string, unknown> : {}),
+                        ...(resolvedDecisionInput && typeof resolvedDecisionInput === "object" ? resolvedDecisionInput as Record<string, unknown> : {}),
+                    };
                     const normalizedInput = normalizeParams(decision.toolName, mergedInput);
                     const validationError = validateToolParameters(selectedTool, normalizedInput);
                     if (validationError) {
-                    await this.updatePlanStepState(taskId, step.stepId, {
-                        state: (step.attempts ?? 0) + 1 < (step.maxAttempts ?? 3) ? "retry_scheduled" : "failed",
-                        lastError: validationError,
-                    });
+                        await this.updatePlanStepState(taskId, step.stepId, {
+                            state: (step.attempts ?? 0) + 1 < (step.maxAttempts ?? 3) ? "retry_scheduled" : "failed",
+                            lastError: validationError,
+                        });
 
-                    if ((step.attempts ?? 0) + 1 < (step.maxAttempts ?? 3)) {
-                        await this.transitionLifecycle(latestTask, "retry_scheduled");
-                        await waitForSignal(this.getBackoffDelay((step.attempts ?? 0) + 1), this.currentExecutionSignal ?? undefined);
-                        await this.transitionLifecycle(latestTask, "ready");
-                        continue;
+                        if ((step.attempts ?? 0) + 1 < (step.maxAttempts ?? 3)) {
+                            await this.transitionLifecycle(latestTask, "retry_scheduled");
+                            await waitForSignal(this.getBackoffDelay((step.attempts ?? 0) + 1), this.currentExecutionSignal ?? undefined);
+                            await this.transitionLifecycle(latestTask, "ready");
+                            continue;
+                        }
+
+                        await this.transitionLifecycle(latestTask, "failed");
+                        break;
                     }
-
-                    await this.transitionLifecycle(latestTask, "failed");
-                    break;
-                }
 
                     const selectedToolName = decision.toolName ?? "none";
                     let activeDecision = decision;
@@ -1875,132 +1875,132 @@ Reply to confirm receipt or contact support if you have questions.
                     let executed = await this.execute(executionPayload);
 
                     if ((!executed.adapterSuccess || executed.error) && (step.attempts ?? 0) < (step.maxAttempts ?? 3)) {
-                    try {
-                        const correctedDecision = await this.decideStepAction({
-                            task: latestTask,
-                            step,
-                            rankedTools,
-                            shortTermMemory: memory.shortTerm as Array<Record<string, unknown>>,
-                            longTermMemory: memory.longTerm as Array<Record<string, unknown>>,
-                            previousStepOutputs,
-                            clarificationReply,
-                            previousError: executed.error ?? "Execution failed",
-                            previousParameters: activeNormalizedInput,
-                            iteration: iteration + 1,
-                        });
-
-                        if (correctedDecision.needsClarification) {
-                            const clarificationQuestion = correctedDecision.clarificationQuestion ?? "Please provide more details.";
-                            await this.updatePlanStepState(taskId, step.stepId, {
-                                state: "blocked",
-                                lastError: clarificationQuestion,
-                                output: {
-                                    summary: "Clarification required",
-                                    data: { clarificationQuestion },
-                                },
+                        try {
+                            const correctedDecision = await this.decideStepAction({
+                                task: latestTask,
+                                step,
+                                rankedTools,
+                                shortTermMemory: memory.shortTerm as Array<Record<string, unknown>>,
+                                longTermMemory: memory.longTerm as Array<Record<string, unknown>>,
+                                previousStepOutputs,
+                                clarificationReply,
+                                previousError: executed.error ?? "Execution failed",
+                                previousParameters: activeNormalizedInput,
+                                iteration: iteration + 1,
                             });
 
-                            await this.pauseForClarification(latestTask, clarificationQuestion, step.stepId);
-                            return {
-                                completed: false,
-                                retryCount: typeof latestTask.retryCount === "number" ? latestTask.retryCount : 0,
-                                maxRetries: typeof latestTask.maxRetries === "number" ? latestTask.maxRetries : 2,
-                                result: lastResult,
-                                verification: lastVerification,
-                            };
-                        }
+                            if (correctedDecision.needsClarification) {
+                                const clarificationQuestion = correctedDecision.clarificationQuestion ?? "Please provide more details.";
+                                await this.updatePlanStepState(taskId, step.stepId, {
+                                    state: "blocked",
+                                    lastError: clarificationQuestion,
+                                    output: {
+                                        summary: "Clarification required",
+                                        data: { clarificationQuestion },
+                                    },
+                                });
 
-                        if (correctedDecision.toolName && correctedDecision.toolName !== "none") {
-                            const correctedTool = this.toolRegistry.get(correctedDecision.toolName);
-                            if (correctedTool) {
-                                const correctedResolvedInput = resolveStepTemplates(step.input ?? {}, previousStepOutputs);
-                                const correctedResolvedDecisionInput = resolveStepTemplates(correctedDecision.toolInput, previousStepOutputs);
-                                const correctedMergedInput = {
-                                    ...(correctedResolvedInput && typeof correctedResolvedInput === "object" ? correctedResolvedInput as Record<string, unknown> : {}),
-                                    ...(correctedResolvedDecisionInput && typeof correctedResolvedDecisionInput === "object" ? correctedResolvedDecisionInput as Record<string, unknown> : {}),
+                                await this.pauseForClarification(latestTask, clarificationQuestion, step.stepId);
+                                return {
+                                    completed: false,
+                                    retryCount: typeof latestTask.retryCount === "number" ? latestTask.retryCount : 0,
+                                    maxRetries: typeof latestTask.maxRetries === "number" ? latestTask.maxRetries : 2,
+                                    result: lastResult,
+                                    verification: lastVerification,
                                 };
-                                const correctedNormalizedInput = normalizeParams(correctedDecision.toolName, correctedMergedInput);
-                                const correctedValidationError = validateToolParameters(correctedTool, correctedNormalizedInput);
+                            }
 
-                                if (!correctedValidationError) {
-                                    activeDecision = correctedDecision;
-                                    activeToolName = correctedDecision.toolName;
-                                    activeNormalizedInput = correctedNormalizedInput;
-                                    executionPayload = {
-                                        ...executionPayload,
-                                        toolName: activeToolName,
-                                        parameters: activeNormalizedInput,
-                                        idempotencyKey: this.buildIdempotencyKey(taskId, step.stepId, attemptNumber + 1),
+                            if (correctedDecision.toolName && correctedDecision.toolName !== "none") {
+                                const correctedTool = this.toolRegistry.get(correctedDecision.toolName);
+                                if (correctedTool) {
+                                    const correctedResolvedInput = resolveStepTemplates(step.input ?? {}, previousStepOutputs);
+                                    const correctedResolvedDecisionInput = resolveStepTemplates(correctedDecision.toolInput, previousStepOutputs);
+                                    const correctedMergedInput = {
+                                        ...(correctedResolvedInput && typeof correctedResolvedInput === "object" ? correctedResolvedInput as Record<string, unknown> : {}),
+                                        ...(correctedResolvedDecisionInput && typeof correctedResolvedDecisionInput === "object" ? correctedResolvedDecisionInput as Record<string, unknown> : {}),
                                     };
+                                    const correctedNormalizedInput = normalizeParams(correctedDecision.toolName, correctedMergedInput);
+                                    const correctedValidationError = validateToolParameters(correctedTool, correctedNormalizedInput);
 
-                                    await this.updatePlanStepState(taskId, step.stepId, {
-                                        selectedToolName: activeToolName,
-                                        input: activeNormalizedInput,
-                                        lastError: null,
-                                    });
+                                    if (!correctedValidationError) {
+                                        activeDecision = correctedDecision;
+                                        activeToolName = correctedDecision.toolName;
+                                        activeNormalizedInput = correctedNormalizedInput;
+                                        executionPayload = {
+                                            ...executionPayload,
+                                            toolName: activeToolName,
+                                            parameters: activeNormalizedInput,
+                                            idempotencyKey: this.buildIdempotencyKey(taskId, step.stepId, attemptNumber + 1),
+                                        };
 
-                                    executed = await this.execute(executionPayload);
+                                        await this.updatePlanStepState(taskId, step.stepId, {
+                                            selectedToolName: activeToolName,
+                                            input: activeNormalizedInput,
+                                            lastError: null,
+                                        });
+
+                                        executed = await this.execute(executionPayload);
+                                    }
                                 }
                             }
+                        } catch (retryErr) {
+                            console.error("agent-runner llm:self-heal-failed", {
+                                taskId,
+                                stepId: step.stepId,
+                                message: retryErr instanceof Error ? retryErr.message : String(retryErr),
+                            });
                         }
-                    } catch (retryErr) {
-                        console.error("agent-runner llm:self-heal-failed", {
-                            taskId,
-                            stepId: step.stepId,
-                            message: retryErr instanceof Error ? retryErr.message : String(retryErr),
-                        });
                     }
-                }
 
                     lastResult = await this.observe({
-                    task: latestTask,
-                    action: executionPayload,
-                    retryCount: typeof latestTask.retryCount === "number" ? latestTask.retryCount : 0,
-                    maxRetries: typeof latestTask.maxRetries === "number" ? latestTask.maxRetries : 2,
-                    attemptPayload: executionPayload,
-                    observed: executed,
-                    verification: null,
-                }, executed);
+                        task: latestTask,
+                        action: executionPayload,
+                        retryCount: typeof latestTask.retryCount === "number" ? latestTask.retryCount : 0,
+                        maxRetries: typeof latestTask.maxRetries === "number" ? latestTask.maxRetries : 2,
+                        attemptPayload: executionPayload,
+                        observed: executed,
+                        verification: null,
+                    }, executed);
 
                     lastVerification = await this.verify(lastResult, {
-                    task: latestTask,
-                    action: executionPayload,
-                    retryCount: typeof latestTask.retryCount === "number" ? latestTask.retryCount : 0,
-                    maxRetries: typeof latestTask.maxRetries === "number" ? latestTask.maxRetries : 2,
-                    attemptPayload: executionPayload,
-                    observed: lastResult,
-                    verification: null,
-                });
-
-                    if (lastVerification.success) {
-                    await this.updatePlanStepState(taskId, step.stepId, {
-                        state: "completed",
-                        completedAt: new Date(),
-                        selectedToolName: activeDecision.toolName,
-                        output: {
-                            summary: lastResult.summary,
-                            data: lastResult.evidence,
-                            confidence: lastVerification.confidence,
-                        },
+                        task: latestTask,
+                        action: executionPayload,
+                        retryCount: typeof latestTask.retryCount === "number" ? latestTask.retryCount : 0,
+                        maxRetries: typeof latestTask.maxRetries === "number" ? latestTask.maxRetries : 2,
+                        attemptPayload: executionPayload,
+                        observed: lastResult,
+                        verification: null,
                     });
 
-                    if (plan.steps.every((entry) => entry.state === "completed")) {
-                        await this.transitionLifecycle(latestTask, "completed");
-                        await this.updateTask(latestTask, {
-                            status: "completed",
-                            progress: 100,
-                            result: {
-                                success: true,
+                    if (lastVerification.success) {
+                        await this.updatePlanStepState(taskId, step.stepId, {
+                            state: "completed",
+                            completedAt: new Date(),
+                            selectedToolName: activeDecision.toolName,
+                            output: {
+                                summary: lastResult.summary,
+                                data: lastResult.evidence,
                                 confidence: lastVerification.confidence,
-                                evidence: {
-                                    previousStepOutputs,
-                                    finalStepId: step.stepId,
-                                    execution: lastResult.evidence,
-                                },
                             },
                         });
-                        break;
-                    }
+
+                        if (plan.steps.every((entry) => entry.state === "completed")) {
+                            await this.transitionLifecycle(latestTask, "completed");
+                            await this.updateTask(latestTask, {
+                                status: "completed",
+                                progress: 100,
+                                result: {
+                                    success: true,
+                                    confidence: lastVerification.confidence,
+                                    evidence: {
+                                        previousStepOutputs,
+                                        finalStepId: step.stepId,
+                                        execution: lastResult.evidence,
+                                    },
+                                },
+                            });
+                            break;
+                        }
 
                         continue;
                     }
@@ -2008,34 +2008,34 @@ Reply to confirm receipt or contact support if you have questions.
                     const attempted = (step.attempts ?? 0) + 1;
 
                     if (attempted < (step.maxAttempts ?? 3)) {
-                    await this.updatePlanStepState(taskId, step.stepId, {
-                        state: "retry_scheduled",
-                        selectedToolName: activeToolName,
-                        lastError: lastResult.error ?? "Execution failed",
-                    });
+                        await this.updatePlanStepState(taskId, step.stepId, {
+                            state: "retry_scheduled",
+                            selectedToolName: activeToolName,
+                            lastError: lastResult.error ?? "Execution failed",
+                        });
 
-                    await this.transitionLifecycle(latestTask, "retry_scheduled");
-                    await waitForSignal(this.getBackoffDelay(attempted), this.currentExecutionSignal ?? undefined);
-                    await this.transitionLifecycle(latestTask, "ready");
+                        await this.transitionLifecycle(latestTask, "retry_scheduled");
+                        await waitForSignal(this.getBackoffDelay(attempted), this.currentExecutionSignal ?? undefined);
+                        await this.transitionLifecycle(latestTask, "ready");
                         continue;
                     }
 
                     await this.updatePlanStepState(taskId, step.stepId, {
-                    state: "failed",
-                    selectedToolName: activeToolName,
-                    lastError: lastResult.error ?? "Verification failed",
-                    output: {
-                        summary: lastResult.summary,
-                        data: lastResult.evidence,
-                        confidence: lastVerification.confidence,
-                    },
-                });
+                        state: "failed",
+                        selectedToolName: activeToolName,
+                        lastError: lastResult.error ?? "Verification failed",
+                        output: {
+                            summary: lastResult.summary,
+                            data: lastResult.evidence,
+                            confidence: lastVerification.confidence,
+                        },
+                    });
 
                     await this.transitionLifecycle(latestTask, "failed");
                     await this.appendCheckpoint(latestTask, {
-                    step: "adjust",
-                    status: "failed",
-                });
+                        step: "adjust",
+                        status: "failed",
+                    });
                     break;
                 } finally {
                     clearTimeout(iterationTimeoutHandle);
