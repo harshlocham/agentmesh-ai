@@ -1,6 +1,5 @@
 import type { TaskCheckpoint, TaskExecutionActionType, TaskExecutionHistory, TaskExecutionUpdatedPayload, TaskResult, TaskUpdatedPayload, TaskValidationLog } from "@chat/types";
 import { RetryManager } from "./retry-manager.js";
-import OpenAI from "openai";
 import * as taskRepo from "@chat/services/repositories/task.repo";
 import * as taskModule from "@chat/db/models/Task";
 import TaskPlanModel from "@chat/db/models/TaskPlan";
@@ -16,6 +15,7 @@ import { acquireTaskLease, heartbeatTaskLease, releaseTaskLease } from "./task-l
 import { assertTransition } from "./task-state-machine.js";
 import { rankTools, type ToolRankingInput } from "./tool-ranking.js";
 import { collectPreviousStepOutputs, llmDecisionSchema, normalizeParams, resolveStepTemplates, type PreviousStepOutputs, validateToolParameters } from "./step-execution-utils.js";
+import { createDefaultLLMProvider } from "./llm/index.js";
 
 const INTERNAL_SECRET_HEADER = "x-internal-secret";
 
@@ -343,13 +343,25 @@ export class AgentRunner {
             return this.llmRequestFn({ model, input });
         }
 
-        const apiKey = process.env.OPENAI_API_KEY;
-        if (!apiKey) {
-            throw new Error("LLM_ERROR: OPENAI_API_KEY not configured");
-        }
+        const provider = createDefaultLLMProvider();
+        const startedAt = Date.now();
 
-        const openai = new OpenAI({ apiKey });
-        return openai.responses.create({ model, input }) as Promise<{ output_text?: string; output?: unknown }>;
+        const response = await provider.generate({
+            model,
+            input,
+        });
+
+        console.log("agent-runner llm:provider", {
+            model,
+            provider: response.provider,
+            latencyMs: Date.now() - startedAt,
+            success: true,
+        });
+
+        return {
+            output_text: response.output_text,
+            output: response.output ?? response.raw,
+        };
     }
 
     private async pauseForClarification(task: TaskDocumentLike, clarificationQuestion: string, stepId?: string) {

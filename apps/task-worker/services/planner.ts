@@ -1,6 +1,7 @@
 import * as dbModule from "@chat/db";
 import TaskPlanModel, { type ITaskStep } from "@chat/db/models/TaskPlan";
 import type { PlannerContext } from "@chat/types";
+import { createDefaultLLMProvider } from "./llm/index.js";
 
 const connectToDatabase =
     (dbModule as unknown as { connectToDatabase?: () => Promise<unknown> }).connectToDatabase
@@ -264,33 +265,20 @@ async function requestPlanFromLlm(
     }
 
     if (!content) {
-        const apiKey = process.env.OPENAI_API_KEY;
+        const apiKey = process.env.OPENAI_API_KEY || process.env.LLM_API_KEY;
         if (!apiKey) return null;
 
-        const baseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
-
-        const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify({
-                model: DEFAULT_PLANNER_MODEL,
-                temperature: 0.1,
-                messages: [
-                    { role: "system", content: prompt },
-                    { role: "user", content: taskPayload },
-                ],
-            }),
+        const provider = createDefaultLLMProvider();
+        const llmResponse = await provider.generate({
+            model: DEFAULT_PLANNER_MODEL,
+            input: [
+                { role: "system", content: prompt },
+                { role: "user", content: taskPayload },
+            ],
+            temperature: 0.1,
         });
 
-        if (!response.ok) return null;
-
-        const payload = await response.json();
-        content = typeof payload?.choices?.[0]?.message?.content === "string"
-            ? payload.choices[0].message.content
-            : "";
+        content = extractLlmResponseText(llmResponse);
     }
 
     const parsed = extractJsonObject(content);

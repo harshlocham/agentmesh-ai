@@ -24,6 +24,8 @@ function buildConfig(): LLMProviderConfig {
         model,
         supportsStructuredOutputs: process.env.LLM_SUPPORTS_STRUCTURED_OUTPUTS !== "false",
         supportsToolCalling: process.env.LLM_SUPPORTS_TOOL_CALLING !== "false",
+        supportsStreaming: process.env.LLM_SUPPORTS_STREAMING !== "false",
+        supportsJsonMode: process.env.LLM_SUPPORTS_JSON_MODE !== "false",
     };
 }
 

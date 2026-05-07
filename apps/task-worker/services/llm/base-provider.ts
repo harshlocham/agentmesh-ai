@@ -11,6 +11,8 @@ export abstract class BaseLLMProvider {
     abstract healthCheck(): Promise<LLMHealthCheckResult>;
     abstract supportsStructuredOutputs(): boolean;
     abstract supportsToolCalling(): boolean;
+    abstract supportsStreaming(): boolean;
+    abstract supportsJsonMode(): boolean;
 
     protected getDefaultTimeoutMs(): number {
         return this.config.timeoutMs ?? 30_000;

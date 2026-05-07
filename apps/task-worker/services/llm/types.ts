@@ -41,6 +41,8 @@ export interface LLMProviderConfig {
     defaultHeaders?: Record<string, string>;
     supportsStructuredOutputs?: boolean;
     supportsToolCalling?: boolean;
+    supportsStreaming?: boolean;
+    supportsJsonMode?: boolean;
 }
 
 export interface LLMGenerateOptions {

@@ -55,6 +55,14 @@ export class OpenAIProvider extends BaseLLMProvider {
         return this.config.supportsToolCalling ?? true;
     }
 
+    override supportsStreaming(): boolean {
+        return this.config.supportsStreaming ?? true;
+    }
+
+    override supportsJsonMode(): boolean {
+        return this.config.supportsJsonMode ?? true;
+    }
+
     async generate(request: LLMRequest, options?: LLMGenerateOptions): Promise<LLMResponse> {
         const requestId = options?.requestId ?? (request.metadata?.requestId as string | undefined) ?? `llm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const timeoutMs = this.resolveTimeoutMs(options);
@@ -97,7 +105,7 @@ export class OpenAIProvider extends BaseLLMProvider {
                 usage,
                 raw: response,
                 requestId: typeof response.id === "string" ? response.id : requestId,
-                finishReason: typeof (response as { status?: string }).status === "string" ? (response as { status?: string }).status : null,
+                finishReason: typeof response.status === "string" ? response.status : null,
             };
 
             if (this.shouldLogRequests()) {
@@ -112,7 +120,21 @@ export class OpenAIProvider extends BaseLLMProvider {
 
             return llmResponse;
         } catch (error) {
-            throw this.normalizeError(error, requestId, timeoutMs);
+            const normalized = this.normalizeError(error, requestId, timeoutMs);
+
+            if (this.shouldLogRequests()) {
+                console.info("llm:error", {
+                    provider: this.config.provider,
+                    model: request.model,
+                    requestId,
+                    timeoutMs,
+                    code: normalized.code,
+                    retryable: normalized.retryable,
+                    message: normalized.message,
+                });
+            }
+
+            throw normalized;
         } finally {
             clearTimeout(timeoutHandle);
         }
