@@ -15,7 +15,7 @@ import {
     updateMessageSemanticState,
 } from "./repositories/task.repo";
 import { connectToDatabase } from "@chat/db";
-import { enqueueOutboxEvent } from "@chat/services/outbox.service";
+import { enqueueOutboxEvent } from "@/lib/services/outbox.service";
 
 const AI_VERSION = "intelligent-v3-preprocess";
 

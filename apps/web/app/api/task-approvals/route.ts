@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { enqueueOutboxEvent } from "@chat/services/outbox.service";
-import { getPendingApprovalTaskActions, getTaskActionById, updateTaskActionExecutionState } from "@chat/services/repositories/task.repo";
+import { enqueueOutboxEvent } from "@/lib/services/outbox.service";
+import { getPendingApprovalTaskActions, getTaskActionById, updateTaskActionExecutionState } from "@/lib/services/repositories/task.repo";
 import { requireAdminUser } from "@/lib/utils/auth/requireAdminUser";
 
 const decisionSchema = z.object({

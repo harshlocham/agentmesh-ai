@@ -6,7 +6,7 @@ import { requireAuthUser } from "@/lib/utils/auth/requireAuthUser";
 import { createTask } from "@/lib/repositories/task.repo";
 import { normalizeTask } from "@/server/normalizers/task.normalizer";
 import { deriveTaskDedupeKey } from "@/lib/services/task.service";
-import { enqueueOutboxEvent } from "@chat/services/outbox.service";
+import { enqueueOutboxEvent } from "@/lib/services/outbox.service";
 
 const createTaskBodySchema = z.object({
     conversationId: z.string().min(1),

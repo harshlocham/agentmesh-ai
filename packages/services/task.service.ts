@@ -1,4 +1,4 @@
-import type { CreateTaskInput } from "@chat/services/validators/task.schema";
+import type { CreateTaskInput } from "@/lib/validators/task.schema";
 import { buildTaskDedupeKey, createTask, upsertTaskByDedupeKey } from "./repositories/task.repo";
 
 export function normalizeTaskTitle(title: string) {
