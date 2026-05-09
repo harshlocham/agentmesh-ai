@@ -1,6 +1,7 @@
 import {
     createInternalRequestHeaders,
 } from "@chat/types/utils/internal-bridge-auth";
+import { resolveInternalBaseUrl } from "../utils/url.js";
 
 export type MessageAction = "edit" | "delete";
 
@@ -18,11 +19,20 @@ type AuthorizeMessageActionResponse = {
 };
 
 function getInternalWebServerUrl(): string {
-    return (
-        process.env.WEB_SERVER_URL?.trim() ||
-        process.env.ORIGIN?.trim() ||
-        "http://localhost:3000"
-    );
+    const candidates = [
+        process.env.WEB_SERVER_URL?.trim(),
+        process.env.ORIGIN?.trim(),
+        "http://localhost:3000",
+    ].filter(Boolean) as string[];
+
+    for (const candidate of candidates) {
+        const resolved = resolveInternalBaseUrl(candidate);
+        if (resolved) {
+            return resolved;
+        }
+    }
+
+    return "http://localhost:3000";
 }
 
 export async function authorizeMessageAction(

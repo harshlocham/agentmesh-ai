@@ -12,42 +12,69 @@ import { UIMessage } from "@chat/types";
 import { AnimatePresence, motion } from "framer-motion";
 import { useConversationPresence } from "@/lib/hooks/useConversationPresence";
 import { useMessageDelivery } from "@/lib/hooks/useMessageDelivery";
+import { recordApiTiming } from "@/lib/utils/performance";
 
 interface MessageContainerProps {
     conversationId: string;
 }
 
 const MessageContainer = ({ conversationId }: MessageContainerProps) => {
-    const sel = useChatStore(s => s.selectedConversationId);
+    const sel = useChatStore((s) => s.selectedConversationId);
     let lastDate: string | null = null;
-    const {
-        messagesByConversation,
-        setMessages,
-        setHasMore,
-        updateEditedMessage,
-        setReplyTo,
-    } = useChatStore();
+    const messagesByConversation = useChatStore((s) => s.messagesByConversation);
+    const setMessages = useChatStore((s) => s.setMessages);
+    const setHasMore = useChatStore((s) => s.setHasMore);
+    const updateEditedMessage = useChatStore((s) => s.updateEditedMessage);
+    const setReplyTo = useChatStore((s) => s.setReplyTo);
     const topRef = useRef<HTMLDivElement>(null);
     const bottomRef = useRef<HTMLDivElement>(null);
     const { user } = useUser();
     const currentUserId = user?._id ?? null;
     const [newMessages, setNewMessages] = useState(false);
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const [loading, setLoading] = useState(false);
 
     useConversationPresence(conversationId);
     useMessageDelivery({ conversationId, currentUserId });
 
-    const fetchMessages = useCallback(async (cursor?: string) => {
+    const fetchMessages = useCallback(async (cursor?: string, signal?: AbortSignal) => {
         if (!sel) return;
         try {
-            const res = await fetch(
-                `/api/messages?conversationId=${sel}&cursor=${cursor || ""}`
-            );
-            const data = await res.json() as UIMessage[];
-            const redata = data.reverse();
-            if (redata.length < 20) setHasMore(String(sel), false);
-            setMessages(String(sel), redata, !!cursor);
+            setLoading(true);
+            for (let attempt = 0; attempt < 2; attempt += 1) {
+                try {
+                    const startedAt = performance.now();
+                    const res = await fetch(
+                        `/api/messages?conversationId=${sel}&cursor=${cursor || ""}`,
+                        { signal, cache: "no-store", credentials: "include" }
+                    );
+                    const data = await res.json() as UIMessage[];
+                    const redata = data.reverse();
+                    if (redata.length < 20) setHasMore(String(sel), false);
+                    setMessages(String(sel), redata, !!cursor);
+                    recordApiTiming(`/api/messages?conversationId=${sel}`, performance.now() - startedAt);
+                    return;
+                } catch (error) {
+                    if (signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) {
+                        return;
+                    }
+
+                    if (attempt === 1) {
+                        throw error;
+                    }
+
+                    await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+                }
+            }
         } catch (err) {
+            if (signal?.aborted || (err instanceof DOMException && err.name === "AbortError")) {
+                return;
+            }
             console.error("Failed to load messages", err);
+        } finally {
+            if (!signal?.aborted) {
+                setLoading(false);
+            }
         }
     }, [sel, setMessages, setHasMore]);
 
@@ -64,7 +91,12 @@ const MessageContainer = ({ conversationId }: MessageContainerProps) => {
     }, [conversationId, messagesByConversation]);
 
     useEffect(() => {
-        fetchMessages();
+        const controller = new AbortController();
+        void fetchMessages(undefined, controller.signal);
+
+        return () => {
+            controller.abort();
+        };
     }, [sel, fetchMessages]);
 
     const handleReact = async (message: UIMessage, emoji: string) => {

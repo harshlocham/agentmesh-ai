@@ -1,6 +1,8 @@
 import * as dbModule from "@chat/db";
 import TaskPlanModel, { type ITaskStep } from "@chat/db/models/TaskPlan";
 import type { PlannerContext } from "@chat/types";
+import { createDefaultLLMProvider } from "./llm/index.js";
+import { parseJsonText } from "./llm/response-parser.js";
 
 const connectToDatabase =
     (dbModule as unknown as { connectToDatabase?: () => Promise<unknown> }).connectToDatabase
@@ -9,6 +11,11 @@ const connectToDatabase =
 
 const DEFAULT_PLANNER_MODEL = process.env.TASK_PLANNER_MODEL || "gpt-4o-mini";
 const DEFAULT_PLANNER_VERSION = "planner-v1";
+
+type PlannerLlmRequest = { model: string; input: string };
+type PlannerLlmResponse = { output_text?: string; output?: unknown };
+type PlannerLlmRequestFn = (request: PlannerLlmRequest) => Promise<PlannerLlmResponse>;
+type CreateOrRefreshTaskPlanOptions = { llmRequestFn?: PlannerLlmRequestFn };
 
 function buildFallbackPlan(context: PlannerContext): { goal: string; successDefinition: string; steps: ITaskStep[] } {
     const toolCandidates = context.availableTools.slice(0, 3).map((tool) => ({
@@ -104,7 +111,8 @@ function extractJsonObject(raw: string): Record<string, unknown> | null {
         }
         return null;
     } catch {
-        return null;
+        const repaired = parseJsonText<Record<string, unknown>>(candidate);
+        return repaired.value && typeof repaired.value === "object" ? repaired.value : null;
     }
 }
 
@@ -204,50 +212,76 @@ function parsePlannedSteps(payload: unknown): ITaskStep[] {
     return parsed;
 }
 
-async function requestPlanFromLlm(context: PlannerContext): Promise<{ goal: string; successDefinition: string; steps: ITaskStep[] } | null> {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) return null;
+function extractLlmResponseText(response: PlannerLlmResponse): string {
+    if (typeof response.output_text === "string" && response.output_text.trim().length > 0) {
+        return response.output_text;
+    }
 
-    const baseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+    if (!Array.isArray(response.output)) return "";
 
+    for (const item of response.output) {
+        if (!item || typeof item !== "object") continue;
+        const content = (item as { content?: unknown }).content;
+        if (!Array.isArray(content)) continue;
+
+        for (const part of content) {
+            if (!part || typeof part !== "object") continue;
+            const text = (part as { text?: unknown }).text;
+            if (typeof text === "string" && text.trim().length > 0) {
+                return text;
+            }
+        }
+    }
+
+    return "";
+}
+
+async function requestPlanFromLlm(
+    context: PlannerContext,
+    options?: CreateOrRefreshTaskPlanOptions
+): Promise<{ goal: string; successDefinition: string; steps: ITaskStep[] } | null> {
     const prompt = [
-        "Return strict JSON object with keys: goal, successDefinition, steps.",
+        "Return one JSON object only with keys: goal, successDefinition, steps.",
         "Each step must include: stepId, title, description, kind, dependencies, fallback, successCriteria, toolCandidates, input, output, maxAttempts.",
-        "Use input/output to preserve template-ready execution context between steps.",
-        "Use toolCandidates only from availableTools.",
-        "Plan must be dependency-aware and executable incrementally.",
+        "Keep steps minimal, dependency-aware, and executable one by one.",
+        "Only use tools from availableTools.",
     ].join(" ");
 
-    const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-            model: DEFAULT_PLANNER_MODEL,
-            temperature: 0.1,
-            messages: [
-                { role: "system", content: prompt },
-                {
-                    role: "user",
-                    content: JSON.stringify({
-                        taskId: context.taskId,
-                        title: context.title,
-                        description: context.description,
-                        availableTools: context.availableTools,
-                    }),
-                },
-            ],
-        }),
+    const taskPayload = JSON.stringify({
+        taskId: context.taskId,
+        title: context.title,
+        description: context.description,
+        availableTools: context.availableTools,
     });
 
-    if (!response.ok) return null;
+    let content = "";
 
-    const payload = await response.json();
-    const content = typeof payload?.choices?.[0]?.message?.content === "string"
-        ? payload.choices[0].message.content
-        : "";
+    if (options?.llmRequestFn) {
+        try {
+            const llmResponse = await options.llmRequestFn({ model: DEFAULT_PLANNER_MODEL, input: `${prompt}\n\n${taskPayload}` });
+            content = extractLlmResponseText(llmResponse);
+        } catch {
+            content = "";
+        }
+    }
+
+    if (!content) {
+        try {
+            const provider = createDefaultLLMProvider();
+            const llmResponse = await provider.generate({
+                model: DEFAULT_PLANNER_MODEL,
+                input: [
+                    { role: "system", content: prompt },
+                    { role: "user", content: taskPayload },
+                ],
+                temperature: 0.1,
+            });
+
+            content = extractLlmResponseText(llmResponse);
+        } catch {
+            return null;
+        }
+    }
 
     const parsed = extractJsonObject(content);
     if (!parsed) return null;
@@ -264,10 +298,10 @@ async function requestPlanFromLlm(context: PlannerContext): Promise<{ goal: stri
     };
 }
 
-export async function createOrRefreshTaskPlan(context: PlannerContext) {
+export async function createOrRefreshTaskPlan(context: PlannerContext, options?: CreateOrRefreshTaskPlanOptions) {
     await connectToDatabase();
 
-    const llmPlan = await requestPlanFromLlm(context);
+    const llmPlan = await requestPlanFromLlm(context, options);
     const plan = llmPlan ?? buildFallbackPlan(context);
 
     return TaskPlanModel.findOneAndUpdate(

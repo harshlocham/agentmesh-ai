@@ -10,7 +10,7 @@ export class SendEmailTool implements Tool {
         body: z.string().min(1).optional(),
     }) as unknown as z.ZodType<Record<string, unknown>>;
 
-    async execute(input: Record<string, unknown>, context: { taskId: string }): Promise<ToolResult> {
+    async execute(input: Record<string, unknown>, context: { taskId: string; signal?: AbortSignal; metadata?: { idempotencyKey?: string } }): Promise<ToolResult> {
         const apiKey = process.env.RESEND_API_KEY;
         const from = process.env.RESEND_FROM_EMAIL;
 
@@ -42,6 +42,7 @@ export class SendEmailTool implements Tool {
             headers: {
                 Authorization: `Bearer ${apiKey}`,
                 "Content-Type": "application/json",
+                ...(context.metadata?.idempotencyKey ? { "Idempotency-Key": context.metadata.idempotencyKey } : {}),
             },
             body: JSON.stringify({
                 from,
@@ -49,6 +50,7 @@ export class SendEmailTool implements Tool {
                 subject,
                 text: body,
             }),
+            signal: context.signal,
         });
 
         const responseText = await response.text();

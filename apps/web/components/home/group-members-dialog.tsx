@@ -10,7 +10,7 @@ import { Crown } from "lucide-react";
 import useChatStore from "@/store/chat-store";
 
 const GroupMembersDialog = () => {
-    const { selectedConversation } = useChatStore();
+    const selectedConversation = useChatStore((s) => s.selectedConversation);
     const members = selectedConversation?.participants || [];
 
     return (

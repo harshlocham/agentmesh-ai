@@ -45,14 +45,20 @@ const OUTBOX_RETRY_JITTER_PCT = Number(process.env.OUTBOX_RETRY_JITTER_PCT || 0.
 
 const redisUrl = process.env.REDIS_URL || process.env.UPSTASH_REDIS_REST_URL;
 const redis = redisUrl
-    ? new Redis(redisUrl, { lazyConnect: true, maxRetriesPerRequest: null })
+    ? new (Redis as unknown as any)(redisUrl, { lazyConnect: true, maxRetriesPerRequest: null })
     : null;
 
 const internalBaseUrl = process.env.SOCKET_SERVER_URL || process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001";
 const INTERNAL_SECRET_HEADER = "x-internal-secret";
 const PERSISTENT_LOOP_ENABLED = process.env.TASK_AGENT_PERSISTENT_LOOP_ENABLED === "true";
 const retryManager = new RetryManager([1000, 2000, 5000]);
-const agentRunner = new AgentRunner({ retryManager, internalBaseUrl });
+const agentRunner = new AgentRunner({
+    retryManager,
+    internalBaseUrl,
+    onExecutionUpdate: async (payload) => {
+        await emitTaskExecutionUpdate(payload);
+    },
+});
 
 const outboxApi = ((outboxModule as unknown as { default?: unknown }).default || outboxModule) as {
     claimOutboxEvents?: (workerId: string, limit?: number) => Promise<Array<{
@@ -275,7 +281,7 @@ function normalizeTaskExecutionRequestedPayload(payload: Record<string, unknown>
 
 async function emitInternal(path: string, conversationId: string, payload: unknown) {
     const internalSecret = process.env.INTERNAL_SECRET || "";
-    await fetch(`${internalBaseUrl}${path}`, {
+    const response = await fetch(`${internalBaseUrl}${path}`, {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
@@ -290,6 +296,13 @@ async function emitInternal(path: string, conversationId: string, payload: unkno
             payload,
         }),
     });
+
+    if (!response.ok) {
+        const detail = await response.text().catch(() => "");
+        throw new Error(
+            `internal emit failed ${path}: ${response.status} ${detail.slice(0, 400)}`.trim()
+        );
+    }
 }
 
 function computeRetryDelay(attempts: number) {
@@ -1172,19 +1185,29 @@ async function runExecutionPlan(payload: NormalizedTaskExecutionRequestedPayload
 async function processTaskExecutionRequested(payload: NormalizedTaskExecutionRequestedPayload) {
     const queuedAt = new Date().toISOString();
     const actionSummary = `${payload.actionType} requested for task ${payload.taskId}`;
+    const runId = `run-${payload.taskId}-${Date.now()}`;
 
     await emitTaskExecutionUpdate({
         taskId: payload.taskId,
         conversationId: payload.conversationId,
         state: "queued",
         actionType: payload.actionType,
-        summary: null,
+        summary: "Execution request queued from chat task.",
         error: null,
         updatedAt: queuedAt,
+        runId,
+        phase: "intake",
+        step: "queued",
+        progress: 5,
     });
 
     const confidence = payload.confidence ?? 0.5;
     const policyDecision = evaluateExecutionPolicy(payload);
+    const safePolicyDecision = {
+        outcome: policyDecision.outcome,
+        riskLevel: policyDecision.riskLevel,
+        reasons: Array.isArray(policyDecision.reasons) ? policyDecision.reasons.slice(0, 3) : [],
+    };
     const lowConfidence = confidence < 0.7;
     const unsafe = policyDecision.riskLevel === "high"
         && policyDecision.reasons.some((reason) =>
@@ -1199,6 +1222,8 @@ async function processTaskExecutionRequested(payload: NormalizedTaskExecutionReq
             ? "Execution blocked by policy: action marked unsafe."
             : (policyDecision.reasons.join(" ") || "Execution blocked by policy.");
 
+        // reuse hoisted safePolicyDecision
+
         await updateTaskLifecycle({
             taskId: payload.taskId,
             conversationId: payload.conversationId,
@@ -1208,7 +1233,7 @@ async function processTaskExecutionRequested(payload: NormalizedTaskExecutionReq
                 confidence: clampConfidence(confidence),
                 evidence: {
                     reason: "policy_blocked",
-                    policyDecision,
+                    policyDecision: safePolicyDecision,
                 },
                 error: blockedReason,
             },
@@ -1222,6 +1247,19 @@ async function processTaskExecutionRequested(payload: NormalizedTaskExecutionReq
             summary: "Execution blocked by policy.",
             error: blockedReason,
             updatedAt: new Date().toISOString(),
+            runId,
+            phase: "policy",
+            step: "policy_blocked",
+            progress: 100,
+            structuredOutput: {
+                status: "failed",
+                confidence: clampConfidence(confidence),
+                summary: "Execution blocked by policy.",
+                error: blockedReason,
+                evidence: {
+                    policyDecision: safePolicyDecision,
+                },
+            },
         });
         return;
     }
@@ -1248,7 +1286,7 @@ async function processTaskExecutionRequested(payload: NormalizedTaskExecutionReq
                         confidence,
                         needsApproval: true,
                         status: "approval_pending",
-                        policyDecision,
+                        policyDecision: safePolicyDecision,
                     },
                 },
                 reason: `Action requires human approval before execution. ${[...policyDecision.reasons, ...(lowConfidence ? [`Low confidence (${confidence.toFixed(2)}).`] : [])].join(" ")}`,
@@ -1271,7 +1309,7 @@ async function processTaskExecutionRequested(payload: NormalizedTaskExecutionReq
                 evidence: {
                     reason: "approval_required",
                     requestedConfidence: confidence,
-                    policyDecision,
+                    policyDecision: safePolicyDecision,
                     lowConfidence,
                 },
                 error: "Approval required before executing this action.",
@@ -1285,6 +1323,10 @@ async function processTaskExecutionRequested(payload: NormalizedTaskExecutionReq
             summary: "Awaiting human approval before execution.",
             error: [...policyDecision.reasons, ...(lowConfidence ? [`Low confidence (${confidence.toFixed(2)}).`] : [])].join(" ") || "Approval required before executing this action.",
             updatedAt: new Date().toISOString(),
+            runId,
+            phase: "policy",
+            step: "approval_pending",
+            progress: 20,
         });
         return;
     }
@@ -1299,6 +1341,16 @@ async function processTaskExecutionRequested(payload: NormalizedTaskExecutionReq
             : "Execution approved by policy. Starting autonomous runner.",
         error: null,
         updatedAt: new Date().toISOString(),
+        runId,
+        phase: "policy",
+        step: "policy_approved",
+        progress: 25,
+        details: {
+            verification: {
+                success: true,
+                confidence: clampConfidence(confidence),
+            },
+        },
     });
 
     try {
@@ -1311,6 +1363,26 @@ async function processTaskExecutionRequested(payload: NormalizedTaskExecutionReq
             summary: outcome.result?.summary ?? (outcome.completed ? "Task completed." : "Task failed."),
             error: outcome.completed ? null : (outcome.result?.error ?? "Execution failed."),
             updatedAt: new Date().toISOString(),
+            runId,
+            phase: "finalize",
+            step: outcome.completed ? "completed" : "failed",
+            progress: 100,
+            details: {
+                toolOutput: outcome.result?.evidence ?? null,
+                verification: outcome.verification
+                    ? {
+                        success: outcome.verification.success,
+                        confidence: clampConfidence(outcome.verification.confidence),
+                    }
+                    : null,
+            },
+            structuredOutput: {
+                status: outcome.completed ? "completed" : "failed",
+                confidence: clampConfidence(outcome.verification?.confidence ?? 0),
+                summary: outcome.result?.summary ?? (outcome.completed ? "Task completed." : "Task failed."),
+                error: outcome.completed ? null : (outcome.result?.error ?? "Execution failed."),
+                evidence: outcome.result?.evidence ?? null,
+            },
         });
     } catch (error) {
         const message = error instanceof Error ? error.message : "Task execution failed";
@@ -1322,6 +1394,17 @@ async function processTaskExecutionRequested(payload: NormalizedTaskExecutionReq
             summary: null,
             error: message,
             updatedAt: new Date().toISOString(),
+            runId,
+            phase: "finalize",
+            step: "exception",
+            progress: 100,
+            structuredOutput: {
+                status: "failed",
+                confidence: 0,
+                summary: "Task execution failed.",
+                error: message,
+                evidence: null,
+            },
         });
         throw error;
     }

@@ -10,7 +10,7 @@ export class CreateIssueTool implements Tool {
         labels: z.array(z.string()).optional(),
     }).passthrough() as unknown as z.ZodType<Record<string, unknown>>;
 
-    async execute(input: Record<string, unknown>, context: { taskId: string; conversationId: string }): Promise<ToolResult> {
+    async execute(input: Record<string, unknown>, context: { taskId: string; conversationId: string; signal?: AbortSignal; metadata?: { idempotencyKey?: string } }): Promise<ToolResult> {
         const token = process.env.GITHUB_TOKEN;
         const repo = process.env.GITHUB_REPO;
 
@@ -32,8 +32,10 @@ export class CreateIssueTool implements Tool {
                 Authorization: `Bearer ${token}`,
                 "Content-Type": "application/json",
                 "User-Agent": "chat-task-worker",
+                ...(context.metadata?.idempotencyKey ? { "Idempotency-Key": context.metadata.idempotencyKey } : {}),
             },
             body: JSON.stringify({ title, body }),
+            signal: context.signal,
         });
 
         const issue = (await response.json()) as { html_url?: string; number?: number; message?: string };

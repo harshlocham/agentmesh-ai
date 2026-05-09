@@ -1,4 +1,5 @@
 import { createInternalRequestHeaders } from "@chat/types/utils/internal-bridge-auth";
+import { resolveInternalBaseUrl } from "../utils/url.js";
 
 type SocketIdentityAuthorizationResponse = {
     allowed: boolean;
@@ -31,7 +32,13 @@ function getInternalWebServerUrls(): string[] {
         "http://127.0.0.1:3002",
     ].filter(Boolean) as string[];
 
-    return Array.from(new Set(candidates.map(normalizeUrl)));
+    return Array.from(
+        new Set(
+            candidates
+                .map((candidate) => resolveInternalBaseUrl(candidate) ?? normalizeUrl(candidate))
+                .filter(Boolean)
+        )
+    );
 }
 
 export async function authorizeSocketIdentity(

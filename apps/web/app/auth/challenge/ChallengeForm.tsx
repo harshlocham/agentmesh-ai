@@ -49,7 +49,7 @@ export default function ChallengeForm({
         }
 
         void sendOtpCode();
-    }, [challengeId, isOtpOnly, otpLoading, otpSent, otpSending]);
+    }, [challengeId, isOtpOnly, otpLoading, otpSent, otpSending, sendOtpCode]);
 
     async function sendOtpCode() {
         if (!challengeId) {

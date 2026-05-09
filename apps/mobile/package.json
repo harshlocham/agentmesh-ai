@@ -17,7 +17,7 @@
     "@react-navigation/stack": "^7.8.9",
     "@tanstack/query-core": "^5.96.2",
     "@tanstack/react-query": "^5.96.2",
-    "axios": "^1.13.0",
+    "axios": "^1.16.0",
     "babel-preset-expo": "~54.0.10",
     "expo": "~54.0.33",
     "expo-application": "~7.0.8",

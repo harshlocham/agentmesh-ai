@@ -32,7 +32,7 @@ const UserListDialog = () => {
     const [isLoading, setIsLoading] = useState(false);
 
     const dialogCloseRef = useRef<HTMLButtonElement>(null);
-    const { setSelectedConversation } = useChatStore();
+    const setSelectedConversation = useChatStore((s) => s.setSelectedConversation);
 
     // 🔁 Load users
     useEffect(() => {

@@ -1,12 +1,12 @@
 {
     "name": "@chat/task-worker",
-    "version": "2.0.1",
+    "version": "2.0.3",
     "private": true,
     "type": "module",
     "scripts": {
         "dev": "tsx index.ts",
         "build": "tsc --noEmit false --outDir dist",
-        "start": "node dist/apps/task-worker/index.js",
+        "start": "tsx index.ts",
         "typecheck": "tsc --noEmit -p tsconfig.json",
         "test": "tsx --test tests/**/*.test.ts"
     },

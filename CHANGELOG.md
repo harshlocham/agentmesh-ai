@@ -1,5 +1,29 @@
 # chat-app
 
+## 2.0.6
+
+### Patch Changes
+
+- 8e3ed9a: Introduce LLM provider abstraction: pluggable providers, shared interfaces, and cleaner configuration.
+
+## 2.0.5
+
+### Patch Changes
+
+- 6c57198: Fix socket auth and deployment flow for production by normalizing origins, enabling cross-subdomain auth cookies, and binding the socket server to the Render-injected port.
+
+## 2.0.4
+
+### Patch Changes
+
+- 5fb4167: fix socket production connection issue
+
+## 2.0.3
+
+### Patch Changes
+
+- dc73990: task-worker: unify LLM boundary, preserve step IO, add self-heal and clarification flows; redact policy decisions and improve execution updates
+
 ## 2.0.2
 
 ### Patch Changes

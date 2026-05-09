@@ -1,32 +1,74 @@
 'use client';
 
 import { useEffect } from "react";
-import { socket, registerGlobalSocketListeners } from "@/lib/socket/socketClient";
+import { socket, registerGlobalSocketListeners, clearGlobalSocketListeners } from "@/lib/socket/socketClient";
 import { useUser } from "@/context/UserContext";
 import { useSocketPresence } from "@/lib/hooks/useSocketPresence";
 import { useNetworkStatus } from "@/lib/hooks/useNetworkStatus";
+import { recordSocketTiming, markStart, markEnd } from "@/lib/utils/performance";
 
 const isTabVisible = () =>
     typeof document === "undefined" || document.visibilityState === "visible";
+
+/**
+ * Deferred socket initialization
+ * Connect and register listeners after initial render using requestIdleCallback
+ * This prevents blocking the initial paint
+ */
+function initializeSocketInBackground() {
+    if (typeof window === 'undefined') return;
+
+    if (socket.connected) {
+        registerGlobalSocketListeners();
+        return;
+    }
+
+    const idleCallback = () => {
+        markStart('socket:connect');
+
+        const connectStartedAt = performance.now();
+        socket.auth = {};
+        registerGlobalSocketListeners();
+
+        const connectHandler = () => {
+            recordSocketTiming(performance.now() - connectStartedAt);
+            markEnd('socket:connect');
+            socket.off('connect', connectHandler);
+        };
+
+        socket.once('connect', connectHandler);
+        socket.connect();
+    };
+
+    // Use requestIdleCallback if available, fallback to setTimeout
+    if ('requestIdleCallback' in window) {
+        requestIdleCallback(idleCallback, { timeout: 2000 });
+    } else {
+        // Fallback: defer to next frame + small delay to ensure initial render completes
+        requestAnimationFrame(() => {
+            setTimeout(idleCallback, 0);
+        });
+    }
+}
 
 export function SocketProvider({ children }: { children: React.ReactNode }) {
     const { user } = useUser();
     const isOnline = useNetworkStatus();
     useSocketPresence(user?._id ?? null);
 
+    // Initialize socket in background, non-blocking
     useEffect(() => {
         if (!user?._id) return;
 
-        socket.auth = { userId: user._id };
-        socket.connect();
-
-        registerGlobalSocketListeners();
+        initializeSocketInBackground();
 
         return () => {
             socket.disconnect();
+            clearGlobalSocketListeners();
         };
     }, [user?._id]);
 
+    // Connection resilience - ensure socket stays connected
     useEffect(() => {
         if (!user?._id) return;
 
@@ -48,7 +90,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
             setTimeout(ensureConnected, 1500);
         };
 
-        if (isOnline) {
+        if (isOnline && !socket.connected) {
             ensureConnected();
         }
 
@@ -66,6 +108,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
         };
     }, [user?._id, isOnline]);
 
+    // Visibility-based connection management
     useEffect(() => {
         if (!user?._id) return;
 

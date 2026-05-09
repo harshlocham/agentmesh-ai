@@ -1,5 +1,19 @@
 # @chat/task-worker
 
+## 2.0.3
+
+### Patch Changes
+
+- 8e3ed9a: Introduce LLM provider abstraction: pluggable providers, shared interfaces, and cleaner configuration.
+
+## 2.0.2
+
+### Patch Changes
+
+- dc73990: task-worker: unify LLM boundary, preserve step IO, add self-heal and clarification flows; redact policy decisions and improve execution updates
+- Updated dependencies [dc73990]
+  - @chat/types@1.3.2
+
 ## 2.0.1
 
 ### Patch Changes

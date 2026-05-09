@@ -5,7 +5,7 @@ import { requireAuthUser } from "@/lib/utils/auth/requireAuthUser";
 import { updateTask } from "@/lib/repositories/task.repo";
 import TaskModel from "@/models/Task";
 import { normalizeTask } from "@/server/normalizers/task.normalizer";
-import { enqueueOutboxEvent } from "@chat/services/outbox.service";
+import { enqueueOutboxEvent } from "@/lib/services/outbox.service";
 
 const updateTaskBodySchema = z.object({
     title: z.string().min(3).max(200).optional(),

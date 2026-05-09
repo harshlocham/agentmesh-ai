@@ -266,6 +266,28 @@ export interface TaskExecutionUpdatedPayload {
     summary: string | null;
     error: string | null;
     updatedAt: Date | string;
+    runId?: string | null;
+    phase?: "intake" | "policy" | "reason" | "tool_execute" | "observe" | "verify" | "finalize";
+    step?: string | null;
+    progress?: number;
+    attempt?: number;
+    details?: {
+        reasoning?: string | null;
+        toolName?: string | null;
+        toolInput?: Record<string, unknown> | null;
+        toolOutput?: unknown;
+        verification?: {
+            success: boolean;
+            confidence: number;
+        } | null;
+    } | null;
+    structuredOutput?: {
+        status: "completed" | "partial" | "failed";
+        confidence: number;
+        summary: string;
+        error: string | null;
+        evidence: unknown;
+    } | null;
 }
 
 export interface MessageSemanticUpdatedPayload {

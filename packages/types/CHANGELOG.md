@@ -1,5 +1,11 @@
 # @chat/types
 
+## 1.3.2
+
+### Patch Changes
+
+- dc73990: task-worker: unify LLM boundary, preserve step IO, add self-heal and clarification flows; redact policy decisions and improve execution updates
+
 ## 1.3.1
 
 ### Patch Changes

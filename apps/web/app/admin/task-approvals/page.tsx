@@ -71,7 +71,7 @@ export default function AdminTaskApprovalsPage() {
 
     useEffect(() => {
         void loadApprovals();
-    }, []);
+    }, [loadApprovals]);
 
     async function decide(item: TaskApprovalRecord, decision: "approve" | "reject") {
         setActingId(item._id);

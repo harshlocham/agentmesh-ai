@@ -1,6 +1,6 @@
 {
     "name": "@chat/web",
-    "version": "4.0.1",
+    "version": "4.0.2",
     "private": true,
     "scripts": {
         "dev": "next dev",
@@ -37,7 +37,7 @@
         "@tanstack/react-virtual": "^3.13.21",
         "@upstash/ratelimit": "^2.0.8",
         "@upstash/redis": "^1.35.6",
-        "axios": "^1.11.0",
+        "axios": "^1.16.0",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
         "dexie": "^4.2.1",

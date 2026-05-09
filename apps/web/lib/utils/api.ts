@@ -6,6 +6,7 @@ import {
     redirectToStepUpChallenge,
     refreshSession,
 } from "@/lib/utils/auth/client-session";
+import { ensureAuthReady } from "@/lib/auth/authBootstrap";
 
 type ApiErrorPayload = {
     error?: string;
@@ -72,6 +73,15 @@ export async function authenticatedFetch(
     init?: RequestInit,
     hasRetried = false
 ): Promise<Response> {
+    // Ensure auth bootstrap completes before attempting protected requests
+    // Skip waiting for the refresh endpoint itself to avoid deadlocks
+    if (url !== "/api/auth/refresh") {
+        try {
+            await ensureAuthReady();
+        } catch (err) {
+            console.warn("authenticatedFetch: ensureAuthReady failed", err);
+        }
+    }
     const response = await fetch(url, {
         ...init,
         credentials: "include",

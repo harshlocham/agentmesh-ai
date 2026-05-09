@@ -2,14 +2,11 @@
 "use client";
 
 import { ClientUser } from "@chat/types";
-import { createContext, useContext, useMemo } from "react";
-import useSWR from "swr";
-import {
-    isStepUpResponse,
-    parseAuthPayload,
-    redirectToStepUpChallenge,
-    refreshSession,
-} from "@/lib/utils/auth/client-session";
+import { createContext, useContext, useMemo, useEffect, useRef, useState } from "react";
+import { parseAuthPayload, isStepUpResponse, redirectToStepUpChallenge } from "@/lib/utils/auth/client-session";
+import { recordApiTiming } from "@/lib/utils/performance";
+import { getMe } from "@/lib/utils/api";
+import { ensureAuthReady } from "@/lib/auth/authBootstrap";
 
 type MeErrorPayload = {
     error?: string;
@@ -22,43 +19,26 @@ function wait(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const fetcher = async (url: string, hasRetried = false): Promise<ClientUser | null> => {
-    const res = await fetch(url, { cache: "no-store", credentials: "include" });
-    const rawText = await res.text();
-    const payload = parseAuthPayload(rawText) as MeErrorPayload | ClientUser | null;
+async function fetchCurrentUser(signal?: AbortSignal): Promise<ClientUser | null> {
+    const startedAt = performance.now();
 
-    if (!res.ok) {
-        const errorPayload = payload as MeErrorPayload | null;
-
-        if (isStepUpResponse(errorPayload)) {
-            redirectToStepUpChallenge(errorPayload?.challengeId);
-            return null;
-        }
-
-        if (res.status === 401) {
-            if (!hasRetried) {
-                const refreshed = await refreshSession();
-                if (refreshed.ok) {
-                    return fetcher(url, true);
-                }
-
-                if (refreshed.ok === false && refreshed.reason === "transient") {
-                    await wait(250);
-                    const retriedRefresh = await refreshSession();
-                    if (retriedRefresh.ok) {
-                        return fetcher(url, true);
-                    }
-                }
-            }
-
-            return null;
-        }
-
-        throw new Error(errorPayload?.error || "Unable to load current user");
+    // Ensure auth bootstrap runs first
+    try {
+        await ensureAuthReady();
+    } catch (err) {
+        console.warn("UserContext: ensureAuthReady failed", err);
     }
 
-    return (payload as ClientUser) || null;
-};
+    try {
+        const user = await getMe();
+        recordApiTiming("/api/me", performance.now() - startedAt);
+        return user || null;
+    } catch (err) {
+        recordApiTiming("/api/me", performance.now() - startedAt);
+        console.error("Failed to load current user", err);
+        return null;
+    }
+}
 
 type UserContextType = {
     user: ClientUser | null;
@@ -66,6 +46,7 @@ type UserContextType = {
     usersById: Record<string, ClientUser>;
     error: Error | null;
     refreshUser: () => Promise<ClientUser | null | undefined>;
+    isInitialized: boolean;
 };
 
 const UserContext = createContext<UserContextType>({
@@ -73,31 +54,95 @@ const UserContext = createContext<UserContextType>({
     usersById: {},
     isLoading: true,
     error: null,
+    isInitialized: false,
     refreshUser: async () => null,
 });
 
-export function UserProvider({ children }: { children: React.ReactNode }) {
-    const { data, error, isLoading, mutate } = useSWR<ClientUser | null>("/api/me", fetcher, {
-        dedupingInterval: 60 * 1000,
-        revalidateOnFocus: false,
-    });
-    const usersById = useMemo(() => {
-        if (!data) return {};
-        const id =
-            typeof data._id === "string" ? data._id : String(data._id);
-        return {
-            [id]: data,
+interface UserProviderProps {
+    children: React.ReactNode;
+    initialUser?: ClientUser | null;
+}
+
+export function UserProvider({ children, initialUser }: UserProviderProps) {
+    const [user, setUser] = useState<ClientUser | null>(initialUser ?? null);
+    const [isLoading, setIsLoading] = useState(!initialUser);
+    const [error, setError] = useState<Error | null>(null);
+    const [isInitialized, setIsInitialized] = useState(!!initialUser);
+    const requestSeq = useRef(0);
+
+    useEffect(() => {
+        if (initialUser) {
+            setUser(initialUser);
+            setIsInitialized(true);
+            setIsLoading(false);
+            return;
         }
-    }, [data]);
+
+        const controller = new AbortController();
+        const requestId = ++requestSeq.current;
+        let timeoutId: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+            controller.abort();
+        }, 10000);
+
+        const loadUser = async () => {
+            try {
+                setIsLoading(true);
+                setError(null);
+
+                const nextUser = await fetchCurrentUser(controller.signal);
+
+                if (controller.signal.aborted || requestSeq.current !== requestId) {
+                    return;
+                }
+
+                setUser(nextUser);
+                setIsInitialized(true);
+            } catch (err) {
+                if (controller.signal.aborted || (err instanceof DOMException && err.name === "AbortError")) {
+                    return;
+                }
+
+                console.error("Failed to load current user", err);
+                setError(err instanceof Error ? err : new Error("Unable to load current user"));
+            } finally {
+                if (timeoutId) clearTimeout(timeoutId);
+                if (!controller.signal.aborted && requestSeq.current === requestId) {
+                    setIsLoading(false);
+                }
+            }
+        };
+
+        void loadUser();
+
+        return () => {
+            if (timeoutId) clearTimeout(timeoutId);
+            controller.abort();
+        };
+    }, [initialUser]);
+
+    const usersById = useMemo(() => {
+        if (!user) return {};
+        const id =
+            typeof user._id === "string" ? user._id : String(user._id);
+        return {
+            [id]: user,
+        }
+    }, [user]);
 
     return (
         <UserContext.Provider
             value={{
-                user: data ?? null,
+                user,
                 usersById,
                 isLoading,
                 error,
-                refreshUser: () => mutate(),
+                isInitialized,
+                refreshUser: async () => {
+                    const refreshed = await fetchCurrentUser();
+                    setUser(refreshed);
+                    setIsInitialized(true);
+                    return refreshed;
+                },
             }}
         >
             {children}

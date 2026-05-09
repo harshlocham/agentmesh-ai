@@ -8,7 +8,9 @@ interface TypingIndicatorProps {
 }
 
 export default function TypingIndicator({ conversationId }: TypingIndicatorProps) {
-    const { typingByConversation, conversations, currentUserId } = useChatStore();
+    const typingByConversation = useChatStore((s) => s.typingByConversation);
+    const conversations = useChatStore((s) => s.conversations);
+    const currentUserId = useChatStore((s) => s.currentUserId);
 
     const typingText = useMemo(() => {
         const typingUserIds = typingByConversation[conversationId] || [];

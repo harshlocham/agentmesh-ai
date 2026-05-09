@@ -98,16 +98,17 @@ services:
     environment:
       REDIS_URL: redis://redis:6379
       MONGODB_URI: mongodb://mongo:27017/chatapp
+      SOCKET_SERVER_URL: http://socket:3001
     depends_on:
       - redis
       - mongo
+      - socket
     networks:
       - chatnet
 
 volumes:
   redis_data:
   mongo_data:
-
 
 networks:
   chatnet:

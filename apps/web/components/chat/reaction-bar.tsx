@@ -4,7 +4,7 @@ const EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🔥"];
 
 export function ReactionBar({ onSelect }: { onSelect: (emoji: string) => void }) {
     return (
-        <div className="absolute -bottom-8 right-0 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-full shadow-md flex gap-1 px-2 py-1">
+        <div className="absolute -bottom-8 right-0 flex gap-1 rounded-full border border-border bg-popover px-2 py-1 shadow-md">
             {EMOJIS.map((emoji) => (
                 <button
                     key={emoji}

@@ -1,6 +1,8 @@
 import * as dbModule from "@chat/db";
 import TaskReflectionModel from "@chat/db/models/TaskReflection";
 import { writeLongTermMemory, writeShortTermMemory } from "./memory-service.js";
+import { createDefaultLLMProvider } from "./llm/index.js";
+import { parseJsonResponse } from "./llm/response-parser.js";
 
 const connectToDatabase =
     (dbModule as unknown as { connectToDatabase?: () => Promise<unknown> }).connectToDatabase
@@ -33,57 +35,39 @@ async function llmReflection(input: {
     executionSummary: string;
     toolName?: string | null;
 }) {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) return null;
-
-    const baseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
-
-    const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
+    try {
+        const provider = createDefaultLLMProvider();
+        const response = await provider.generate({
             model: DEFAULT_REFLECTION_MODEL,
-            temperature: 0.1,
-            messages: [
+            input: [
                 {
                     role: "system",
-                    content: "Return strict JSON with whatWorked (string[]), whatFailed (string[]), improvements (string[]), confidence (0-1 number).",
+                    content: "Return one JSON object only with whatWorked (string[]), whatFailed (string[]), improvements (string[]), confidence (0-1 number).",
                 },
                 {
                     role: "user",
                     content: JSON.stringify(input),
                 },
             ],
-        }),
-    });
+            temperature: 0.1,
+        });
 
-    if (!response.ok) return null;
-    const payload = await response.json();
-    const content = typeof payload?.choices?.[0]?.message?.content === "string"
-        ? payload.choices[0].message.content
-        : "";
+        const parsed = parseJsonResponse<Record<string, unknown>>(response);
+        if (!parsed.value) return null;
 
-    const start = content.indexOf("{");
-    const end = content.lastIndexOf("}");
-    if (start < 0 || end <= start) return null;
-
-    try {
-        const parsed = JSON.parse(content.slice(start, end + 1)) as Record<string, unknown>;
+        const record = parsed.value;
         return {
-            whatWorked: Array.isArray(parsed.whatWorked)
-                ? parsed.whatWorked.filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+            whatWorked: Array.isArray(record.whatWorked)
+                ? record.whatWorked.filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
                 : [],
-            whatFailed: Array.isArray(parsed.whatFailed)
-                ? parsed.whatFailed.filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+            whatFailed: Array.isArray(record.whatFailed)
+                ? record.whatFailed.filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
                 : [],
-            improvements: Array.isArray(parsed.improvements)
-                ? parsed.improvements.filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+            improvements: Array.isArray(record.improvements)
+                ? record.improvements.filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
                 : [],
-            confidence: typeof parsed.confidence === "number"
-                ? Math.max(0, Math.min(1, parsed.confidence))
+            confidence: typeof record.confidence === "number"
+                ? Math.max(0, Math.min(1, record.confidence))
                 : 0.5,
         };
     } catch {

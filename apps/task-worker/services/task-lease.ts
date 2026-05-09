@@ -6,7 +6,11 @@ const connectToDatabase =
     || ((dbModule as unknown as { default?: { connectToDatabase?: () => Promise<unknown> } }).default?.connectToDatabase)
     || (async () => undefined);
 
-const DEFAULT_LEASE_MS = Number(process.env.TASK_LEASE_MS || 30000);
+export const DEFAULT_LEASE_MS = Number(process.env.TASK_LEASE_MS || 30000);
+
+export function getLeaseRenewalIntervalMs(leaseMs = DEFAULT_LEASE_MS) {
+    return Math.max(1000, Math.floor(leaseMs / 3));
+}
 
 export async function acquireTaskLease(taskId: string, workerId: string, leaseMs = DEFAULT_LEASE_MS) {
     await connectToDatabase();

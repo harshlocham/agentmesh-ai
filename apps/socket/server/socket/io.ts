@@ -2,51 +2,16 @@ import { Server as SocketIOServer } from "socket.io";
 import type { Server as HTTPServer } from "http";
 import { createAdapter } from "@socket.io/redis-adapter";
 import type { RedisAdapterClients } from "./redis.js";
-
-function parseAllowedOrigins(raw: string | undefined): string[] {
-    if (!raw) return [];
-    return raw
-        .split(",")
-        .map((origin) => origin.trim())
-        .filter(Boolean);
-}
-
-function isOriginAllowed(origin: string | undefined, allowedOrigins: string[]) {
-    if (!origin) {
-        return true;
-    }
-
-    if (allowedOrigins.includes("*") || allowedOrigins.includes(origin)) {
-        return true;
-    }
-
-    if (process.env.NODE_ENV !== "production") {
-        if (origin.startsWith("exp://")) {
-            return true;
-        }
-
-        if (
-            origin.startsWith("http://localhost:")
-            || origin.startsWith("http://127.0.0.1:")
-            || origin.startsWith("http://10.")
-            || origin.startsWith("http://192.168.")
-        ) {
-            return true;
-        }
-
-        if (allowedOrigins.length === 0) {
-            return true;
-        }
-    }
-
-    return false;
-}
+import {
+    isOriginAllowed,
+    parseCommaSeparatedValues,
+} from "./utils/url.js";
 
 export function initIO(
     httpServer: HTTPServer,
     redis: RedisAdapterClients
 ) {
-    const allowedOrigins = parseAllowedOrigins(process.env.ORIGIN);
+    const allowedOrigins = parseCommaSeparatedValues(process.env.ORIGIN);
 
     const io = new SocketIOServer(httpServer, {
         path: "/api/socket",
