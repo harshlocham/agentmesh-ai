@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { normalizeToolParams } from "@chat/services/tool-normalizers.js";
+import * as toolNormalizers from "@chat/services/tool-normalizers";
 
 const TEMPLATE_PATTERN = /{{\s*([^}]+)\s*}}/g;
 const DRAFT_PLACEHOLDER_PATTERN = /\[(?:\s*(?:your|please|insert|to be filled|tbd)[^\]]*)\]/i;
@@ -113,7 +113,7 @@ export function collectPreviousStepOutputs(steps: Array<{ stepId: string; state:
 export function normalizeParams(toolName: string, params: Record<string, unknown>): Record<string, unknown> {
     if (toolName === "send_email") {
         try {
-            return normalizeToolParams(toolName, params);
+            return toolNormalizers.normalizeToolParams(toolName, params);
         } catch (error) {
             console.warn("Tool parameter normalization failed", {
                 error,

@@ -10,7 +10,7 @@ if (existsSync(rootEnvPath)) {
 }
 
 const nextConfig: NextConfig = {
-  transpilePackages: ["@chat/auth"],
+  transpilePackages: ["@chat/auth", "@chat/services", "@chat/db"],
   images: {
     domains: ["lh3.googleusercontent.com", "ik.imagekit.io"],
     remotePatterns: [
@@ -19,6 +19,16 @@ const nextConfig: NextConfig = {
         hostname: "ik.imagekit.io",
       },
     ],
+  },
+  webpack: (config) => {
+    config.resolve = config.resolve || {};
+    config.resolve.alias = {
+      ...(config.resolve.alias || {}),
+      "@chat/services": resolve(process.cwd(), "../../packages/services"),
+      "@chat/db": resolve(process.cwd(), "../../packages/db"),
+    };
+
+    return config;
   },
 };
 
