@@ -1,4 +1,4 @@
-import { resolveContactReference } from "@chat/services/contact.service.js";
+import * as contactService from "@chat/services/contact.service";
 import {
     applyClarificationSelection,
     buildAmbiguousContactQuestion,
@@ -130,7 +130,7 @@ async function resolveSendEmailParams(
             };
         }
 
-        const resolved = await resolveContactReference(userId, reference);
+        const resolved = await contactService.resolveContactReference(userId, reference);
         if (resolved.success && resolved.resolved) {
             resolvedEmails.push(resolved.resolved.email);
             continue;

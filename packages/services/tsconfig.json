@@ -21,6 +21,12 @@
             "@/lib/validators/*": [
                 "./validators/*"
             ],
+            "@chat/services/*": [
+                "./*"
+            ],
+            "@chat/services/validators/*": [
+                "./validators/*"
+            ],
             "@/server/normalizers/*": [
                 "./normalizers/*"
             ]

@@ -1,6 +1,6 @@
 import type { TaskCheckpoint, TaskExecutionActionType, TaskExecutionHistory, TaskExecutionUpdatedPayload, TaskResult, TaskUpdatedPayload, TaskValidationLog } from "@chat/types";
 import { RetryManager } from "./retry-manager.js";
-import * as taskRepo from "@chat/services/repositories/task.repo";
+import { getLatestExecutionTaskAction as getLatestExecutionTaskActionFromRepo } from "../../../packages/services/dist/services/repositories/task.repo.js";
 import * as taskModule from "@chat/db/models/Task";
 import TaskPlanModel from "@chat/db/models/TaskPlan";
 import ToolRegistry from "./tools/tool-registry.js";
@@ -355,7 +355,7 @@ export class AgentRunner {
         this.toolRegistry = options?.toolRegistry ?? this.createDefaultToolRegistry();
         this.taskSuccessRegistry = options?.taskSuccessRegistry ?? createDefaultTaskSuccessRegistry();
         this.internalBaseUrl = options?.internalBaseUrl ?? process.env.SOCKET_SERVER_URL ?? process.env.NEXT_PUBLIC_SOCKET_URL ?? "http://localhost:3001";
-        this.getLatestExecutionTaskAction = options?.getLatestExecutionTaskAction ?? resolveGetLatestExecutionTaskAction(taskRepo);
+        this.getLatestExecutionTaskAction = options?.getLatestExecutionTaskAction ?? getLatestExecutionTaskActionFromRepo;
         this.persistentLoopEnabled = options?.persistentLoopEnabled ?? (process.env.TASK_AGENT_PERSISTENT_LOOP_ENABLED === "true");
         this.workerId = options?.workerId ?? process.env.TASK_WORKER_ID ?? `${process.pid}-agent-runner`;
         this.retrieveMemoryFn = options?.retrieveMemoryFn ?? retrieveMemory;

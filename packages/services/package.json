@@ -11,19 +11,29 @@
             "default": "./dist/index.js"
         },
         "./outbox.service": {
-            "import": "./dist/outbox.service.js",
-            "types": "./dist/outbox.service.d.ts",
-            "default": "./dist/outbox.service.js"
+            "import": "./dist/services/outbox.service.js",
+            "types": "./dist/services/outbox.service.d.ts",
+            "default": "./dist/services/outbox.service.js"
         },
         "./task-intelligence.service": {
-            "import": "./dist/task-intelligence.service.js",
-            "types": "./dist/task-intelligence.service.d.ts",
-            "default": "./dist/task-intelligence.service.js"
+            "import": "./dist/services/task-intelligence.service.js",
+            "types": "./dist/services/task-intelligence.service.d.ts",
+            "default": "./dist/services/task-intelligence.service.js"
         },
         "./repositories/task.repo": {
-            "import": "./dist/repositories/task.repo.js",
-            "types": "./dist/repositories/task.repo.d.ts",
-            "default": "./dist/repositories/task.repo.js"
+            "import": "./dist/services/repositories/task.repo.js",
+            "types": "./dist/services/repositories/task.repo.d.ts",
+            "default": "./dist/services/repositories/task.repo.js"
+        },
+        "./contact.service": {
+            "import": "./dist/services/contact.service.js",
+            "types": "./dist/services/contact.service.d.ts",
+            "default": "./dist/services/contact.service.js"
+        },
+        "./tool-normalizers": {
+            "import": "./dist/services/tool-normalizers.js",
+            "types": "./dist/services/tool-normalizers.d.ts",
+            "default": "./dist/services/tool-normalizers.js"
         },
         "./validators/*": {
             "import": "./dist/validators/*.js",

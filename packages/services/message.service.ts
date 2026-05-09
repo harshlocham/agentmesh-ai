@@ -5,7 +5,7 @@ import mongoose, { Types } from "mongoose";
 import { Conversation } from "@chat/db/models/Conversation";
 import Message, { IMessagePopulated } from "@chat/db/models/Message";
 import { connectToDatabase } from "@chat/db";
-import { enqueueOutboxEvent } from "@chat/services/outbox.service";
+import { enqueueOutboxEvent } from "./outbox.service";
 //import { socket } from "@/lib/socket/socketClient";
 
 export async function createMessage(data: CreateMessageInput, senderId: string) {

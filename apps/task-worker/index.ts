@@ -5,9 +5,9 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { TaskExecutionActionType, TaskExecutionUpdatedPayload, TaskResult, TaskUpdatedPayload } from "@chat/types";
-import * as outboxModule from "@chat/services/outbox.service";
-import * as intelligenceModule from "@chat/services/task-intelligence.service";
-import * as taskRepo from "@chat/services/repositories/task.repo";
+import { claimOutboxEvents, markOutboxEventCompleted, markOutboxEventDeadLetter, markOutboxEventFailed } from "../../packages/services/dist/services/outbox.service.js";
+import { processMessageTaskIntelligence as processMessageTaskIntelligenceFromService } from "../../packages/services/dist/services/task-intelligence.service.js";
+import * as taskRepo from "../../packages/services/dist/services/repositories/task.repo.js";
 import * as taskModule from "@chat/db/models/Task";
 import { RetryManager } from "./services/retry-manager.js";
 import AgentRunner from "./services/agent-runner.js";
@@ -60,38 +60,7 @@ const agentRunner = new AgentRunner({
     },
 });
 
-const outboxApi = ((outboxModule as unknown as { default?: unknown }).default || outboxModule) as {
-    claimOutboxEvents?: (workerId: string, limit?: number) => Promise<Array<{
-        _id: { toString(): string };
-        topic: string;
-        dedupeKey: string;
-        payload: Record<string, unknown>;
-        attempts: number;
-    }>>;
-    markOutboxEventCompleted?: (id: string) => Promise<void>;
-    markOutboxEventFailed?: (id: string, errorMessage: string, retryDelayMs?: number) => Promise<void>;
-    markOutboxEventDeadLetter?: (id: string, errorMessage: string) => Promise<void>;
-};
-
-const processMessageTaskIntelligence = (
-    (intelligenceModule as unknown as { default?: unknown }).default
-    || intelligenceModule
-) as {
-    processMessageTaskIntelligence?: (input: {
-        messageId: string;
-        conversationId: string;
-        senderId: string;
-        content: string;
-        messageType: string;
-    }) => Promise<{
-        semanticPayload: {
-            conversationId: string;
-        };
-        taskCreatedPayload?: unknown;
-        taskUpdatedPayload?: unknown;
-        taskLinkedPayload?: unknown;
-    } | null>;
-};
+const processMessageTaskIntelligence = processMessageTaskIntelligenceFromService;
 
 type TaskModelLike = {
     findById: (id: string) => Promise<{
@@ -311,24 +280,16 @@ function computeRetryDelay(attempts: number) {
 }
 
 function getOutboxFns() {
-    const claim = outboxApi.claimOutboxEvents;
-    const complete = outboxApi.markOutboxEventCompleted;
-    const fail = outboxApi.markOutboxEventFailed;
-    const deadLetter = outboxApi.markOutboxEventDeadLetter;
-
-    if (typeof claim !== "function" || typeof complete !== "function" || typeof fail !== "function" || typeof deadLetter !== "function") {
-        throw new Error(`Outbox module exports are invalid. keys=${Object.keys(outboxModule).join(",")}`);
-    }
-
-    return { claim, complete, fail, deadLetter };
+    return {
+        claim: claimOutboxEvents,
+        complete: markOutboxEventCompleted,
+        fail: markOutboxEventFailed,
+        deadLetter: markOutboxEventDeadLetter,
+    };
 }
 
 function getIntelligenceFn() {
-    const fn = processMessageTaskIntelligence.processMessageTaskIntelligence;
-    if (typeof fn !== "function") {
-        throw new Error(`Task intelligence module exports are invalid. keys=${Object.keys(intelligenceModule).join(",")}`);
-    }
-    return fn;
+    return processMessageTaskIntelligence;
 }
 
 async function emitTaskExecutionUpdate(payload: TaskExecutionUpdatedPayload) {
