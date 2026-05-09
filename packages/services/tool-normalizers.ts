@@ -94,6 +94,18 @@ function normalizeBodyText(text: string): string {
     return normalizedLines.join("\n").trim();
 }
 
+function sanitizeDraftPlaceholders(text: string): string {
+    return text
+        .replace(/\[\s*your\s+name\s*\]/gi, "Task Agent")
+        .replace(/\[\s*your\s+email\s*\]/gi, "")
+        .replace(/\[\s*please[^\]]*\]/gi, "")
+        .replace(/\[\s*insert[^\]]*\]/gi, "")
+        .replace(/\[\s*to\s+be\s+filled[^\]]*\]/gi, "")
+        .replace(/\[\s*tbd\s*\]/gi, "")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+}
+
 function coerceBodyValue(params: Record<string, unknown>): string | null {
     const bodyKeys = ["body", "content", "message", "text", "notes"];
 
@@ -161,8 +173,8 @@ export function normalizeEmailParams(params: Record<string, unknown>): Normalize
 
     const parsedBody = coerceBodyValue(params);
     const explicitSubject = coerceString(params.subject);
-    const subject = explicitSubject ?? inferDefaultSubject(parsedBody ?? "Automated Email Update");
-    const body = parsedBody ?? inferDefaultBody(subject);
+    const subject = sanitizeDraftPlaceholders(explicitSubject ?? inferDefaultSubject(parsedBody ?? "Automated Email Update"));
+    const body = sanitizeDraftPlaceholders(parsedBody ?? inferDefaultBody(subject));
 
     // Whitelist only schema-safe send_email fields.
     return {

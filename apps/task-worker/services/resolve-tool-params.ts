@@ -118,12 +118,12 @@ async function resolveSendEmailParams(
     const resolvedEmails: string[] = [];
 
     for (const reference of references) {
-        if (isValidEmail(reference)) {
-            resolvedEmails.push(reference.trim().toLowerCase());
-            continue;
-        }
-
         if (!userId) {
+            if (isValidEmail(reference)) {
+                resolvedEmails.push(reference.trim().toLowerCase());
+                continue;
+            }
+
             return {
                 status: "failed",
                 error: `Missing user context for resolving recipient '${reference}'.`,
@@ -133,6 +133,11 @@ async function resolveSendEmailParams(
         const resolved = await resolveContactReference(userId, reference);
         if (resolved.success && resolved.resolved) {
             resolvedEmails.push(resolved.resolved.email);
+            continue;
+        }
+
+        if (isValidEmail(reference)) {
+            resolvedEmails.push(reference.trim().toLowerCase());
             continue;
         }
 

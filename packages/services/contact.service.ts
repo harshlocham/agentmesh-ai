@@ -153,6 +153,67 @@ export async function resolveContactReference(userId: string, reference: string)
         return { success: false, error: "Contact reference is empty." };
     }
 
+    async function resolveByLocalPart(localPart: string): Promise<ContactResolutionResult | null> {
+        const normalizedLocalPart = localPart.trim();
+        if (!normalizedLocalPart) {
+            return null;
+        }
+
+        const exactNameMatches = await findByExactName(userId, normalizedLocalPart);
+        if (exactNameMatches.length === 1) {
+            const match = toContactMatch(exactNameMatches[0]);
+            if (!match) {
+                return { success: false, error: "Matched contact has invalid data." };
+            }
+
+            return {
+                success: true,
+                resolved: {
+                    ...match,
+                    confidence: 0.93,
+                },
+            };
+        }
+
+        if (exactNameMatches.length > 1) {
+            return {
+                success: false,
+                ambiguous: exactNameMatches
+                    .map((item: Record<string, unknown>) => toContactMatch(item))
+                    .filter((item: ContactMatch | null): item is ContactMatch => Boolean(item)),
+                error: "Ambiguous contact reference.",
+            };
+        }
+
+        const aliasMatches = await findByAlias(userId, normalizedLocalPart);
+        if (aliasMatches.length === 1) {
+            const match = toContactMatch(aliasMatches[0]);
+            if (!match) {
+                return { success: false, error: "Matched contact has invalid data." };
+            }
+
+            return {
+                success: true,
+                resolved: {
+                    ...match,
+                    confidence: 0.92,
+                },
+            };
+        }
+
+        if (aliasMatches.length > 1) {
+            return {
+                success: false,
+                ambiguous: aliasMatches
+                    .map((item: Record<string, unknown>) => toContactMatch(item))
+                    .filter((item: ContactMatch | null): item is ContactMatch => Boolean(item)),
+                error: "Ambiguous contact alias.",
+            };
+        }
+
+        return null;
+    }
+
     if (isValidEmail(trimmedReference)) {
         const known = await findByExactEmail(userId, trimmedReference);
         if (known) {
@@ -164,6 +225,12 @@ export async function resolveContactReference(userId: string, reference: string)
                     confidence: 1,
                 },
             };
+        }
+
+        const localPart = trimmedReference.slice(0, trimmedReference.indexOf("@"));
+        const localPartResolution = await resolveByLocalPart(localPart);
+        if (localPartResolution) {
+            return localPartResolution;
         }
 
         return {

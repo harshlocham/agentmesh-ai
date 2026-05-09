@@ -2,7 +2,7 @@ import { z } from "zod";
 import { normalizeToolParams } from "@chat/services/tool-normalizers.js";
 
 const TEMPLATE_PATTERN = /{{\s*([^}]+)\s*}}/g;
-const EMAIL_PLACEHOLDER_PATTERN = /\[[^\]]+\]/;
+const DRAFT_PLACEHOLDER_PATTERN = /\[(?:\s*(?:your|please|insert|to be filled|tbd)[^\]]*)\]/i;
 
 export const llmDecisionSchema = z.object({
     tool: z.string().nullable(),
@@ -146,7 +146,7 @@ export function normalizeParams(toolName: string, params: Record<string, unknown
 
 export function hasInvalidPlaceholderValue(value: unknown): boolean {
     if (typeof value === "string") {
-        return EMAIL_PLACEHOLDER_PATTERN.test(value) || value.includes("{{") || value.includes("}}");
+        return DRAFT_PLACEHOLDER_PATTERN.test(value) || value.includes("{{") || value.includes("}}");
     }
 
     if (Array.isArray(value)) {
