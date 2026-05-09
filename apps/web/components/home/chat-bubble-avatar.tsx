@@ -17,7 +17,7 @@ const ChatBubbleAvatar = ({ isGroup, isMember, sender }: ChatBubbleAvatarProps) 
             )}
             <AvatarImage src={sender?.profilePicture} className='rounded-full object-cover w-8 h-8' />
             <AvatarFallback className='w-8 h-8 '>
-                <div className='animate-pulse bg-gray-tertiary rounded-full'></div>
+                <div className="h-8 w-8 animate-pulse rounded-full bg-[hsl(var(--gray-tertiary))]" />
             </AvatarFallback>
         </Avatar>
     );

@@ -60,12 +60,12 @@ const Conversation = ({ conversation }: ConversationProps) => {
     return (
         <>
             <div
-                className={`flex gap-2 items-center p-3 hover:bg-chat-hover cursor-pointer
+                className={`flex cursor-pointer items-center gap-2 p-3 hover:bg-[hsl(var(--chat-hover))]
           ${isActive ? "bg-[hsl(var(--gray-tertiary))]" : ""}
         `}
                 onClick={() => setSelectedConversation(conversation)}
             >
-                <Avatar className="border border-gray-900 overflow-visible relative">
+                <Avatar className="relative overflow-visible border border-border">
                     {isDirectOnline && (
                         <div className="absolute top-0 right-0 w-2.5 h-2.5 bg-green-500 rounded-full border-2 border-foreground" />
                     )}
@@ -74,7 +74,7 @@ const Conversation = ({ conversation }: ConversationProps) => {
                         alt={conversationName || "User avatar"}
                         className="object-cover rounded-full"
                     />
-                    <AvatarFallback className="bg-slate-700 text-slate-100 text-sm font-semibold">
+                    <AvatarFallback className="bg-muted text-sm font-semibold text-muted-foreground">
                         {avatarFallbackInitial}
                     </AvatarFallback>
                 </Avatar>
@@ -85,7 +85,7 @@ const Conversation = ({ conversation }: ConversationProps) => {
                             {conversationName}
                         </h3>
 
-                        <span className="text-xs text-gray-500 ml-auto">
+                        <span className="ml-auto text-xs text-muted-foreground">
                             {formatDate(
                                 (conversation?.updatedAt
                                 ) ??
@@ -96,7 +96,7 @@ const Conversation = ({ conversation }: ConversationProps) => {
                         </span>
                     </div>
 
-                    <p className="text-[12px] mt-1 text-gray-500 flex items-center gap-1">
+                    <p className="mt-1 flex items-center gap-1 text-[12px] text-muted-foreground">
                         {lastMessage?.sender?._id === user?._id && <MessageSeenSvg />}
                         {conversation.isGroup && <Users size={16} />}
 
@@ -116,7 +116,7 @@ const Conversation = ({ conversation }: ConversationProps) => {
                 </div>
             </div>
 
-            <hr className="h-px mx-10 bg-gray-primary" />
+            <hr className="mx-10 h-px border-0 bg-border" />
         </>
     );
 };

@@ -281,7 +281,7 @@ function normalizeTaskExecutionRequestedPayload(payload: Record<string, unknown>
 
 async function emitInternal(path: string, conversationId: string, payload: unknown) {
     const internalSecret = process.env.INTERNAL_SECRET || "";
-    await fetch(`${internalBaseUrl}${path}`, {
+    const response = await fetch(`${internalBaseUrl}${path}`, {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
@@ -296,6 +296,13 @@ async function emitInternal(path: string, conversationId: string, payload: unkno
             payload,
         }),
     });
+
+    if (!response.ok) {
+        const detail = await response.text().catch(() => "");
+        throw new Error(
+            `internal emit failed ${path}: ${response.status} ${detail.slice(0, 400)}`.trim()
+        );
+    }
 }
 
 function computeRetryDelay(attempts: number) {

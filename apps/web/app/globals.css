@@ -13,6 +13,8 @@
   /* --gray-chat: #f3f4f6; */
   /* very light gray */
   --gray-secondary: 220 8% 96%;
+  /* Active row / tertiary surface (sidebar lists) */
+  --gray-tertiary: 220 14% 94%;
   --chat-hover: 210 20% 98%;
   /* almost white with tiny blue tint */
 
