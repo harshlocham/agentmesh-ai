@@ -60,6 +60,39 @@ const agentRunner = new AgentRunner({
     },
 });
 
+let shuttingDown = false;
+
+async function shutdown(signal: NodeJS.Signals) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+
+    console.log(`task-worker received ${signal}, shutting down gracefully...`);
+
+    try {
+        if (redis) {
+            await redis.quit();
+        }
+    } catch (error) {
+        console.warn("task-worker redis shutdown failed", error);
+    }
+
+    try {
+        await mongoose.disconnect();
+    } catch (error) {
+        console.warn("task-worker mongoose shutdown failed", error);
+    }
+
+    process.exit(0);
+}
+
+process.once("SIGTERM", () => {
+    void shutdown("SIGTERM");
+});
+
+process.once("SIGINT", () => {
+    void shutdown("SIGINT");
+});
+
 const outboxApi = ((outboxModule as unknown as { default?: unknown }).default || outboxModule) as {
     claimOutboxEvents?: (workerId: string, limit?: number) => Promise<Array<{
         _id: { toString(): string };
@@ -1592,7 +1625,7 @@ async function run() {
         console.warn("task-worker disabled: MONGODB_URI is not set. Set MONGODB_URI to enable task processing.");
         // Keep process alive so monorepo dev does not fail hard when worker env is missing.
         // eslint-disable-next-line no-constant-condition
-        while (true) {
+        while (!shuttingDown) {
             await wait(10_000);
         }
     }
@@ -1604,7 +1637,7 @@ async function run() {
     }
 
     // eslint-disable-next-line no-constant-condition
-    while (true) {
+    while (!shuttingDown) {
         const events = await claim(WORKER_ID, BATCH_SIZE);
 
         if (events.length === 0) {

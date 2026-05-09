@@ -1,0 +1,44 @@
+# Replace the secret placeholder values in DigitalOcean before first deploy.
+name: chat-app-task-worker
+region: nyc
+
+workers:
+  - name: task-worker
+    source_dir: /
+    github:
+      repo: harshlocham/chat-app
+      branch: fix/socket-cookie-domain-auth
+      deploy_on_push: true
+    dockerfile_path: apps/task-worker/Dockerfile
+    instance_count: 1
+    instance_size_slug: basic-xxs
+    envs:
+      - key: NODE_ENV
+        value: production
+      - key: MONGODB_URI
+        scope: RUN_TIME
+        type: SECRET
+        value: REPLACE_ME_MONGODB_URI
+      - key: REDIS_URL
+        scope: RUN_TIME
+        type: SECRET
+        value: REPLACE_ME_REDIS_URL
+      - key: ACCESS_TOKEN_SECRET
+        scope: RUN_TIME
+        type: SECRET
+        value: REPLACE_ME_ACCESS_TOKEN_SECRET
+      - key: INTERNAL_SECRET
+        scope: RUN_TIME
+        type: SECRET
+        value: REPLACE_ME_INTERNAL_SECRET
+      - key: SOCKET_SERVER_URL
+        scope: RUN_TIME
+        value: https://ws.harshlocham.dev
+      - key: TASK_WORKER_BATCH_SIZE
+        value: "10"
+      - key: TASK_WORKER_POLL_MS
+        value: "800"
+      - key: TASK_AGENT_CONFIDENCE_THRESHOLD
+        value: "0.7"
+      - key: TASK_AGENT_PERSISTENT_LOOP_ENABLED
+        value: "false"
