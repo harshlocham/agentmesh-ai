@@ -4,10 +4,10 @@ import { StepUpChallenge } from "@/models/StepUpChallenge";
 import { User } from "@/models/User";
 
 type ChallengePageProps = {
-    searchParams?: {
+    searchParams?: Promise<{
         cid?: string;
         next?: string;
-    };
+    }>;
 };
 
 function sanitizeNextPath(nextPath?: string): string {
@@ -46,8 +46,9 @@ async function getInitialVerificationMethod(challengeId: string): Promise<"passw
 }
 
 export default async function ChallengePage({ searchParams }: ChallengePageProps) {
-    const challengeId = searchParams?.cid || "";
-    const nextPath = sanitizeNextPath(searchParams?.next);
+    const resolvedSearchParams = (await searchParams) ?? {};
+    const challengeId = resolvedSearchParams.cid || "";
+    const nextPath = sanitizeNextPath(resolvedSearchParams.next);
     const initialVerificationMethod = await getInitialVerificationMethod(challengeId);
 
     return (

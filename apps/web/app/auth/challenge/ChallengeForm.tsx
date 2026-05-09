@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -43,15 +43,7 @@ export default function ChallengeForm({
         [challengeId, otp, otpSent, otpLoading]
     );
 
-    useEffect(() => {
-        if (!isOtpOnly || otpSent || otpSending || otpLoading || !challengeId) {
-            return;
-        }
-
-        void sendOtpCode();
-    }, [challengeId, isOtpOnly, otpLoading, otpSent, otpSending, sendOtpCode]);
-
-    async function sendOtpCode() {
+    const sendOtpCode = useCallback(async () => {
         if (!challengeId) {
             setError("Challenge is missing. Please refresh and try again.");
             return false;
@@ -87,7 +79,15 @@ export default function ChallengeForm({
         } finally {
             setOtpSending(false);
         }
-    }
+    }, [challengeId]);
+
+    useEffect(() => {
+        if (!isOtpOnly || otpSent || otpSending || otpLoading || !challengeId) {
+            return;
+        }
+
+        void sendOtpCode();
+    }, [challengeId, isOtpOnly, otpLoading, otpSent, otpSending, sendOtpCode]);
 
     async function onPasswordSubmit(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
@@ -202,22 +202,20 @@ export default function ChallengeForm({
                     <p className="text-sm font-medium text-[hsl(var(--foreground))]">Use a one-time code</p>
                     <p className="mt-1 text-sm text-[hsl(var(--muted-foreground))]">
                         {isOtpOnly
-                            ? "This account uses OTP verification. A code will be sent to your email."
+                            ? "This account uses OTP verification. A code will be sent to your email, and you can request another if needed."
                             : "If this account uses Google sign-in, request a code sent to your email."}
                     </p>
                 </div>
 
-                {!isOtpOnly ? (
-                    <Button
-                        className="w-full"
-                        type="button"
-                        variant="secondary"
-                        onClick={sendOtpCode}
-                        disabled={otpSending || loading || otpLoading || !challengeId}
-                    >
-                        {otpSending ? "Sending code..." : otpSent ? "Resend code" : "Send code"}
-                    </Button>
-                ) : null}
+                <Button
+                    className="w-full"
+                    type="button"
+                    variant="secondary"
+                    onClick={sendOtpCode}
+                    disabled={otpSending || loading || otpLoading || !challengeId}
+                >
+                    {otpSending ? "Sending code..." : otpSent ? "Resend code" : "Send code"}
+                </Button>
 
                 {otpSent ? (
                     <form className="space-y-4" onSubmit={onOtpSubmit}>
