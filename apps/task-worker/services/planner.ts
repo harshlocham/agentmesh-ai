@@ -1,6 +1,8 @@
 import * as dbModule from "@chat/db";
 import TaskPlanModel, { type ITaskStep } from "@chat/db/models/TaskPlan";
 import type { PlannerContext } from "@chat/types";
+import { createDefaultLLMProvider } from "./llm/index.js";
+import { parseJsonText } from "./llm/response-parser.js";
 
 const connectToDatabase =
     (dbModule as unknown as { connectToDatabase?: () => Promise<unknown> }).connectToDatabase
@@ -109,7 +111,8 @@ function extractJsonObject(raw: string): Record<string, unknown> | null {
         }
         return null;
     } catch {
-        return null;
+        const repaired = parseJsonText<Record<string, unknown>>(candidate);
+        return repaired.value && typeof repaired.value === "object" ? repaired.value : null;
     }
 }
 
@@ -238,11 +241,10 @@ async function requestPlanFromLlm(
     options?: CreateOrRefreshTaskPlanOptions
 ): Promise<{ goal: string; successDefinition: string; steps: ITaskStep[] } | null> {
     const prompt = [
-        "Return strict JSON object with keys: goal, successDefinition, steps.",
+        "Return one JSON object only with keys: goal, successDefinition, steps.",
         "Each step must include: stepId, title, description, kind, dependencies, fallback, successCriteria, toolCandidates, input, output, maxAttempts.",
-        "Use input/output to preserve template-ready execution context between steps.",
-        "Use toolCandidates only from availableTools.",
-        "Plan must be dependency-aware and executable incrementally.",
+        "Keep steps minimal, dependency-aware, and executable one by one.",
+        "Only use tools from availableTools.",
     ].join(" ");
 
     const taskPayload = JSON.stringify({
@@ -264,33 +266,21 @@ async function requestPlanFromLlm(
     }
 
     if (!content) {
-        const apiKey = process.env.OPENAI_API_KEY;
-        if (!apiKey) return null;
-
-        const baseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
-
-        const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify({
+        try {
+            const provider = createDefaultLLMProvider();
+            const llmResponse = await provider.generate({
                 model: DEFAULT_PLANNER_MODEL,
-                temperature: 0.1,
-                messages: [
+                input: [
                     { role: "system", content: prompt },
                     { role: "user", content: taskPayload },
                 ],
-            }),
-        });
+                temperature: 0.1,
+            });
 
-        if (!response.ok) return null;
-
-        const payload = await response.json();
-        content = typeof payload?.choices?.[0]?.message?.content === "string"
-            ? payload.choices[0].message.content
-            : "";
+            content = extractLlmResponseText(llmResponse);
+        } catch {
+            return null;
+        }
     }
 
     const parsed = extractJsonObject(content);

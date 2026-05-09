@@ -234,9 +234,12 @@ function createRunnerHarness(options?: {
     fallbackPolicy?: "dependency_preserving" | "immediate_execution";
     sendEmailOutputs?: Array<{ summary: string; adapterSuccess: boolean; evidence: unknown; error?: string }>;
     createIssueOutputs?: Array<{ summary: string; adapterSuccess: boolean; evidence: unknown; error?: string }>;
+    useProviderLlm?: boolean;
+    usePlanner?: boolean;
+    planFactory?: () => PlanDoc;
 }) {
     const task = createMockTask();
-    const plan = createPlan(Boolean(options?.withFallbackPlan), options?.fallbackPolicy ?? "dependency_preserving");
+    let plan = options?.usePlanner ? null : createPlan(Boolean(options?.withFallbackPlan), options?.fallbackPolicy ?? "dependency_preserving");
     const stepPatches: Array<{ stepId: string; patch: Record<string, unknown> }> = [];
     let reflectionCalls = 0;
     let memoryCalls = 0;
@@ -291,8 +294,6 @@ function createRunnerHarness(options?: {
             releaseCalls += 1;
             return { acknowledged: true } as any;
         },
-        getTaskPlanFn: async () => plan as any,
-        createOrRefreshTaskPlanFn: async () => plan as any,
         retrieveMemoryFn: async () => {
             memoryCalls += 1;
             return {
@@ -307,15 +308,20 @@ function createRunnerHarness(options?: {
         assertTransitionFn: () => {
             // no-op for deterministic tests
         },
-        llmRequestFn: createLlmRequestFn(),
+        llmRequestFn: options?.useProviderLlm ? undefined : createLlmRequestFn(),
+        getTaskPlanFn: async () => (plan as any),
+        createOrRefreshTaskPlanFn: async () => {
+            plan = options?.planFactory?.() ?? createPlan(Boolean(options?.withFallbackPlan), options?.fallbackPolicy ?? "dependency_preserving");
+            return plan as any;
+        },
         updatePlanStepStateFn: async (_taskId, stepId, patch) => {
             stepPatches.push({ stepId, patch: patch as Record<string, unknown> });
-            const step = plan.steps.find((entry) => entry.stepId === stepId);
+            const step = plan?.steps.find((entry) => entry.stepId === stepId);
             if (!step) return;
             Object.assign(step, patch);
 
             // unlock step-2 once step-1 fails
-            if (stepId === "step-1" && patch.state === "failed") {
+            if (stepId === "step-1" && patch.state === "failed" && plan) {
                 const fallback = plan.steps.find((entry) => entry.stepId === "step-2");
                 if (fallback) {
                     fallback.state = "ready";
@@ -327,7 +333,7 @@ function createRunnerHarness(options?: {
     return {
         runner,
         task,
-        plan,
+        get plan() { return plan as PlanDoc; },
         stepPatches,
         sendEmailTool,
         createIssueTool,
@@ -383,6 +389,15 @@ function withMockedFetch(payloads: Array<MockLlmPayload>, fn: () => Promise<void
     });
 }
 
+function restoreEnvVar(key: string, value: string | undefined) {
+    if (value === undefined) {
+        delete process.env[key];
+        return;
+    }
+
+    process.env[key] = value;
+}
+
 test("persistent loop: acquires lease, heartbeats, and releases lease", async () => {
     const harness = createRunnerHarness();
 
@@ -397,6 +412,32 @@ test("persistent loop: acquires lease, heartbeats, and releases lease", async ()
     assert.equal(harness.stats.acquireCalls, 1);
     assert.ok(harness.stats.heartbeatCalls >= 1);
     assert.equal(harness.stats.releaseCalls, 1);
+});
+
+test("persistent loop: tool execution and verification exercise the runtime", async () => {
+    const harness = createRunnerHarness({
+        sendEmailOutputs: [
+            {
+                summary: "mail sent",
+                adapterSuccess: true,
+                evidence: { responseStatus: 200, responseBody: { id: "email-1" } },
+            },
+        ],
+    });
+
+    await withMockedFetch(
+        [{ toolName: "send_email", arguments: { to: ["team@example.com"], subject: "Status update" } }],
+        async () => {
+            const outcome = await harness.runner.runTask("task-1");
+
+            assert.equal(outcome.completed, true);
+        }
+    );
+
+    assert.ok(harness.stats.acquireCalls >= 1);
+    assert.ok(harness.stats.releaseCalls >= 1);
+    assert.equal(harness.sendEmailTool.calls.length, 1);
+    assert.equal(harness.sendEmailTool.calls[0]?.name, "send_email");
 });
 
 test("persistent loop: uses memory + ranked tool decision", async () => {

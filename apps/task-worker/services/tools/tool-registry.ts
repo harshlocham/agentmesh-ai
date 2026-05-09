@@ -12,6 +12,13 @@ export type ToolExecutionContext = {
     taskId: string;
     conversationId: string;
     messageId: string | null;
+    signal?: AbortSignal;
+    metadata?: {
+        runId?: string;
+        stepId?: string;
+        attempt?: number;
+        idempotencyKey?: string;
+    };
 };
 
 export type ToolResult = {

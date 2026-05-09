@@ -13,7 +13,7 @@ export class ScheduleMeetingTool implements Tool {
         attendees: z.array(z.string()).optional(),
     }).passthrough() as unknown as z.ZodType<Record<string, unknown>>;
 
-    async execute(input: Record<string, unknown>, context: { taskId: string; conversationId: string; messageId: string | null }): Promise<ToolResult> {
+    async execute(input: Record<string, unknown>, context: { taskId: string; conversationId: string; messageId: string | null; signal?: AbortSignal; metadata?: { idempotencyKey?: string } }): Promise<ToolResult> {
         const webhookUrl = process.env.SCHEDULE_MEETING_WEBHOOK_URL;
         if (!webhookUrl) {
             throw new Error("Schedule meeting adapter is not configured. Set SCHEDULE_MEETING_WEBHOOK_URL.");
@@ -23,6 +23,7 @@ export class ScheduleMeetingTool implements Tool {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
+                ...(context.metadata?.idempotencyKey ? { "Idempotency-Key": context.metadata.idempotencyKey } : {}),
             },
             body: JSON.stringify({
                 taskId: context.taskId,
@@ -30,6 +31,7 @@ export class ScheduleMeetingTool implements Tool {
                 triggerMessageId: context.messageId,
                 parameters: input,
             }),
+            signal: context.signal,
         });
 
         const responseText = await response.text();
