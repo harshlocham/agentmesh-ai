@@ -32,8 +32,37 @@ export type ContactResolutionResult = {
     error?: string;
 };
 
+/** RFC 5321 / common practice upper bound; avoids ReDoS on huge inputs. */
+const MAX_EMAIL_LENGTH = 254;
+
+/**
+ * Linear-time shape check (no backtracking regex). Intentionally similar to the
+ * prior pattern: single @, no whitespace, domain contains a dot with non-empty
+ * parts on both sides of the last dot.
+ */
 function isValidEmail(value: string): boolean {
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+    if (value.length === 0 || value.length > MAX_EMAIL_LENGTH) {
+        return false;
+    }
+
+    if (/\s/.test(value)) {
+        return false;
+    }
+
+    const atIndex = value.indexOf("@");
+    if (atIndex <= 0 || value.lastIndexOf("@") !== atIndex) {
+        return false;
+    }
+
+    const domain = value.slice(atIndex + 1);
+    const lastDot = domain.lastIndexOf(".");
+    if (lastDot <= 0 || lastDot === domain.length - 1) {
+        return false;
+    }
+
+    const domainHead = domain.slice(0, lastDot);
+    const domainTail = domain.slice(lastDot + 1);
+    return domainHead.length > 0 && domainTail.length > 0;
 }
 
 function normalizeName(value: string): string {
