@@ -1,5 +1,14 @@
 # @chat/task-worker
 
+## 2.0.5
+
+### Patch Changes
+
+- 51f6a45: Hardened realtime authorization and internal communication architecture across the platform. Refactored the socket server into a transport-only layer using secure internal web authorization bridges, centralized conversation/task ACL enforcement, server-resolved participant fan-out, and mandatory INTERNAL_SECRET validation. Added shared authorization services for REST and socket flows, removed client-trusted recipient authorization paths, restricted unsafe task status mutations, and improved overall security consistency for realtime messaging and task execution.
+- Updated dependencies [51f6a45]
+  - @chat/services@2.0.2
+  - @chat/db@2.0.3
+
 ## 2.0.4
 
 ### Patch Changes
