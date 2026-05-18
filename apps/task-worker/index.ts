@@ -12,6 +12,7 @@ import * as taskModule from "@chat/db/models/Task";
 import { RetryManager } from "./services/retry-manager.js";
 import AgentRunner from "./services/agent-runner.js";
 import { evaluateExecutionPolicy } from "./services/execution-policy.js";
+import { createInternalRequestHeaders } from "@chat/types/utils/internal-bridge-auth";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const visitedEnvPaths = new Set<string>();
@@ -49,8 +50,18 @@ const redis = redisUrl
     : null;
 
 const internalBaseUrl = process.env.SOCKET_SERVER_URL || process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001";
-const INTERNAL_SECRET_HEADER = "x-internal-secret";
 const PERSISTENT_LOOP_ENABLED = process.env.TASK_AGENT_PERSISTENT_LOOP_ENABLED === "true";
+
+function assertInternalSecretConfigured(): void {
+    const isProduction = process.env.NODE_ENV === "production";
+    if (!isProduction) {
+        return;
+    }
+
+    if (!process.env.INTERNAL_SECRET?.trim()) {
+        throw new Error("INTERNAL_SECRET is required in production for task-worker");
+    }
+}
 const retryManager = new RetryManager([1000, 2000, 5000]);
 const agentRunner = new AgentRunner({
     retryManager,
@@ -249,17 +260,9 @@ function normalizeTaskExecutionRequestedPayload(payload: Record<string, unknown>
 }
 
 async function emitInternal(path: string, conversationId: string, payload: unknown) {
-    const internalSecret = process.env.INTERNAL_SECRET || "";
     const response = await fetch(`${internalBaseUrl}${path}`, {
         method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            ...(internalSecret
-                ? {
-                    [INTERNAL_SECRET_HEADER]: internalSecret,
-                }
-                : {}),
-        },
+        headers: createInternalRequestHeaders(),
         body: JSON.stringify({
             conversationId,
             payload,
@@ -1598,6 +1601,8 @@ async function run() {
         }
     }
 }
+
+assertInternalSecretConfigured();
 
 run().catch((error) => {
     console.error("task-worker fatal error", error);

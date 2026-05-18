@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuthUser } from "@/lib/utils/auth/requireAuthUser";
+import { requireConversationAccess } from "@/lib/utils/auth/requireConversationAccess";
 import { connectToDatabase } from "@/lib/Db/db";
 import Message from "@/models/Message";
 import { Conversation } from "@/models/Conversation";
@@ -30,6 +31,12 @@ export async function PATCH(
         if (!message) {
             return NextResponse.json({ error: "Message not found" }, { status: 404 });
         }
+
+        const access = await requireConversationAccess(
+            message.conversationId.toString(),
+            guard.user
+        );
+        if (access.response) return access.response;
 
         if (String(message.sender) !== guard.user.id) {
             return NextResponse.json({ error: "Not allowed" }, { status: 403 });

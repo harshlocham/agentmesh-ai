@@ -11,6 +11,8 @@ module.exports = {
   },
   moduleNameMapper: {
     "^@/(.*)$": "<rootDir>/$1",
+    "^@chat/types/(.*)$": "<rootDir>/../../packages/types/$1",
+    "^@chat/services/(.*)$": "<rootDir>/../../packages/services/$1",
   },
   clearMocks: true,
 };

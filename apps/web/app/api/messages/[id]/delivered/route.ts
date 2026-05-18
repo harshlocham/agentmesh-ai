@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import mongoose from "mongoose";
 import Message from "@/models/Message";
 import { requireAuthUser } from "@/lib/utils/auth/requireAuthUser";
+import { requireConversationAccess } from "@/lib/utils/auth/requireConversationAccess";
 import { markMessageDelivered } from "@/lib/services/message-receipt.service";
 import { getInternalSocketServerUrl } from "@/lib/socket/socketConfig";
 import { createInternalRequestHeaders } from "@chat/types/utils/internal-bridge-auth";
@@ -29,6 +30,12 @@ export async function PATCH(
         }
 
         const userId = guard.user.id;
+
+        const access = await requireConversationAccess(
+            message.conversationId.toString(),
+            guard.user
+        );
+        if (access.response) return access.response;
 
         // ❌ sender should NOT mark delivered
         if (message.sender.toString() === userId) {

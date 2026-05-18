@@ -20,7 +20,7 @@ import { parseJsonText } from "./llm/response-parser.js";
 import { resolveToolParameters, type ResolveToolParametersResult } from "./resolve-tool-params.js";
 import type { PendingResolution } from "./entity-resolution.service.js";
 
-const INTERNAL_SECRET_HEADER = "x-internal-secret";
+import { createInternalRequestHeaders } from "@chat/types/utils/internal-bridge-auth";
 
 type TaskModelLike = {
     findById: (id: string) => Promise<TaskDocumentLike | null>;
@@ -2747,13 +2747,9 @@ Reply to confirm receipt or contact support if you have questions.
     }
 
     private async emitTaskUpdated(conversationId: string, payload: TaskUpdatedPayload) {
-        const internalSecret = process.env.INTERNAL_SECRET || "";
         await fetch(`${this.internalBaseUrl}/internal/task-updated`, {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                ...(internalSecret ? { [INTERNAL_SECRET_HEADER]: internalSecret } : {}),
-            },
+            headers: createInternalRequestHeaders(),
             body: JSON.stringify({
                 conversationId,
                 payload,

@@ -6,6 +6,7 @@ import mongoose from "mongoose";
 import { getInternalSocketServerUrl } from "@/lib/socket/socketConfig";
 import { createInternalRequestHeaders } from "@chat/types/utils/internal-bridge-auth";
 import { requireAuthUser } from "@/lib/utils/auth/requireAuthUser";
+import { requireConversationAccess } from "@/lib/utils/auth/requireConversationAccess";
 
 
 export async function POST(
@@ -40,6 +41,12 @@ export async function POST(
                 { status: 400 }
             );
         }
+
+        const access = await requireConversationAccess(
+            message.conversationId.toString(),
+            guard.user
+        );
+        if (access.response) return access.response;
 
         const userId = new mongoose.Types.ObjectId(guard.user.id);
 

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { connectToDatabase } from "@/lib/Db/db";
 import Message from "@/models/Message";
 import { requireAuthUser } from "@/lib/utils/auth/requireAuthUser";
+import { requireConversationAccess } from "@/lib/utils/auth/requireConversationAccess";
 import { updateMessageSemanticState } from "@/lib/repositories/task.repo";
 import { getInternalSocketServerUrl } from "@/lib/socket/socketConfig";
 import { createInternalRequestHeaders } from "@chat/types/utils/internal-bridge-auth";
@@ -27,6 +28,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         if (!message) {
             return NextResponse.json({ error: "Message not found" }, { status: 404 });
         }
+
+        const access = await requireConversationAccess(
+            message.conversationId.toString(),
+            guard.user
+        );
+        if (access.response) return access.response;
 
         const now = new Date();
         await updateMessageSemanticState(id, {

@@ -3,6 +3,7 @@ import { z } from "zod";
 import TaskModel from "@/models/Task";
 import { connectToDatabase } from "@/lib/Db/db";
 import { requireAuthUser } from "@/lib/utils/auth/requireAuthUser";
+import { requireConversationAccess } from "@/lib/utils/auth/requireConversationAccess";
 import { buildTaskActionIdempotencyKey, createTask, createTaskAction } from "@/lib/repositories/task.repo";
 import { normalizeTask } from "@/server/normalizers/task.normalizer";
 import { deriveTaskDedupeKey } from "@/lib/services/task.service";
@@ -31,6 +32,9 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: "conversationId is required" }, { status: 400 });
     }
 
+    const access = await requireConversationAccess(conversationId, guard.user);
+    if (access.response) return access.response;
+
     const tasks = await TaskModel.find({ conversationId }).sort({ updatedAt: -1 }).limit(200).lean();
     return NextResponse.json(tasks.map(normalizeTask), { status: 200 });
 }
@@ -43,6 +47,10 @@ export async function POST(req: NextRequest) {
         await connectToDatabase();
 
         const body = createTaskBodySchema.parse(await req.json());
+
+        const access = await requireConversationAccess(body.conversationId, guard.user);
+        if (access.response) return access.response;
+
         const dedupeKey = deriveTaskDedupeKey({
             conversationId: body.conversationId,
             title: body.title,
