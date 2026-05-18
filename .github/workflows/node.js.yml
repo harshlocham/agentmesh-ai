@@ -57,34 +57,37 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
+      - name: Enable Corepack
+        run: corepack enable
+
       - name: Use Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ matrix.node-version }}
-          cache: "npm"
+          cache: pnpm
 
       - name: Restore Turbo cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .turbo
-          key: ${{ runner.os }}-turbo-${{ matrix.node-version }}-${{ github.ref_name }}-${{ hashFiles('package-lock.json', 'turbo.json') }}
+          key: ${{ runner.os }}-turbo-${{ matrix.node-version }}-${{ github.ref_name }}-${{ hashFiles('pnpm-lock.yaml', 'turbo.json') }}
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
       - name: Build shared packages
-        run: npm run build -- "--filter=./packages/*"
+        run: pnpm exec turbo run build --filter=./packages/*
 
       - name: Type check
-        run: npm run typecheck
+        run: pnpm run typecheck
 
       - name: Lint
-        run: npm run lint
+        run: pnpm run lint
 
       - name: Build monorepo
-        run: npm run build
+        run: pnpm run build
 
       - name: Verify build artifacts
-        run: npm run ci:verify-artifacts
+        run: pnpm run ci:verify-artifacts
 
   web-runtime:
     name: Web Runtime Smoke Test
@@ -106,19 +109,22 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
+      - name: Enable Corepack
+        run: corepack enable
+
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-          cache: "npm"
+          cache: pnpm
 
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
       - name: Build shared types package
-        run: npm run build --workspace=@chat/types
-      - run: npm run build
+        run: pnpm --filter @chat/types build
+      - run: pnpm run build
 
       - name: Start web app
         run: |
-          npm run start --workspace=@chat/web &
+          pnpm --filter @chat/web start &
           sleep 10
 
       - name: Check web health
@@ -144,21 +150,24 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
+      - name: Enable Corepack
+        run: corepack enable
+
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-          cache: "npm"
+          cache: pnpm
 
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
       - name: Build shared types package
-        run: npm run build --workspace=@chat/types
+        run: pnpm --filter @chat/types build
 
       - name: Build web app
-        run: npm run build --workspace=@chat/web
+        run: pnpm --filter @chat/web build
 
       - name: Start web app
         run: |
-          npm run start --workspace=@chat/web &
+          pnpm --filter @chat/web start &
           sleep 10
 
       - name: Wait for web health

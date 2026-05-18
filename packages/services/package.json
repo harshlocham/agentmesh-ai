@@ -62,8 +62,8 @@
         "ts-jest": "^29.4.4"
     },
     "dependencies": {
-        "@chat/db": "*",
-        "@chat/types": "*",
+        "@chat/db": "workspace:*",
+        "@chat/types": "workspace:*",
         "zod": "^4.0.5"
     }
 }

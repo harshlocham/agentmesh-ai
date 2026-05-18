@@ -11,9 +11,9 @@
         "test": "INTERNAL_SECRET=test-internal-secret tsx --test tests/**/*.test.ts"
     },
     "dependencies": {
-        "@chat/db": "^2.0.2",
-        "@chat/services": "^2.0.1",
-        "@chat/types": "*",
+        "@chat/db": "workspace:*",
+        "@chat/services": "workspace:*",
+        "@chat/types": "workspace:*",
         "dotenv": "^17.2.3",
         "openai": "^4.11.0",
         "ioredis": "^5.10.0",

@@ -6,4 +6,4 @@ services:
       dockerfile: apps/task-worker/Dockerfile
     env_file:
       - .env
-    command: [ "npm", "run", "start", "--workspace=@chat/task-worker" ]
+    command: [ "pnpm", "--filter", "@chat/task-worker", "start" ]
