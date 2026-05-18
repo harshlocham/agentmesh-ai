@@ -60,7 +60,12 @@ export async function GET(req: NextRequest) {
         const clientMessages = (Array.isArray(messages) ? messages : []).map(normalizeMessage);
         return NextResponse.json(clientMessages, { status: 200 });
     } catch (err) {
-        console.error(err);
-        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+        console.error("GET /api/messages error", err);
+
+        if (err instanceof AuthorizationError) {
+            return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+        }
+
+        return NextResponse.json({ error: "Server error" }, { status: 500 });
     }
 }

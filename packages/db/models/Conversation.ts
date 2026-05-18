@@ -52,7 +52,6 @@ const conversationSchema = new Schema<IConversation>({
 });
 
 conversationSchema.index({ participants: 1 });
-conversationSchema.index({ _id: 1, participants: 1 });
 
 export interface IConversationPopulated extends IConversation {
     participants: IUser[];
