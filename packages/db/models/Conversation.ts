@@ -51,6 +51,8 @@ const conversationSchema = new Schema<IConversation>({
     timestamps: true
 });
 
+conversationSchema.index({ participants: 1 });
+
 export interface IConversationPopulated extends IConversation {
     participants: IUser[];
 }

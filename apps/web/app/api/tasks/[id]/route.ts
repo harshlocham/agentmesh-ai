@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { connectToDatabase } from "@/lib/Db/db";
 import { requireAuthUser } from "@/lib/utils/auth/requireAuthUser";
+import { requireTaskAccess } from "@/lib/utils/auth/requireConversationAccess";
 import { updateTask } from "@/lib/repositories/task.repo";
 import TaskModel from "@/models/Task";
 import { normalizeTask } from "@/server/normalizers/task.normalizer";
@@ -10,7 +11,6 @@ import { enqueueOutboxEvent } from "@/lib/services/outbox.service";
 const updateTaskBodySchema = z.object({
     title: z.string().min(3).max(200).optional(),
     description: z.string().max(8000).optional(),
-    status: z.enum(["pending", "executing", "completed", "failed", "partial"]).optional(),
     priority: z.enum(["low", "medium", "high", "urgent"]).optional(),
     assignees: z.array(z.string().min(1)).max(32).optional(),
     dueAt: z.coerce.date().nullable().optional(),
@@ -24,6 +24,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         if (guard.response) return guard.response;
 
         await connectToDatabase();
+
+        const access = await requireTaskAccess(id, guard.user);
+        if (access.response) return access.response;
 
         const body = updateTaskBodySchema.parse(await req.json());
         const before = await TaskModel.findById(id).lean();
