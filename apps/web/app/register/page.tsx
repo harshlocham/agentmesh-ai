@@ -17,6 +17,7 @@ import { Loader2, RefreshCcw } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import ThemeSwitch from "@/components/home/theme-switch";
 import { toast } from "sonner";
+import { useUser } from "@/context/UserContext";
 
 export default function RegisterPage() {
     const [step, setStep] = useState<"register" | "verify">("register");
@@ -28,6 +29,7 @@ export default function RegisterPage() {
     const [timer, setTimer] = useState(0);
 
     const router = useRouter();
+    const { refreshUser } = useUser();
 
     useEffect(() => {
         let interval: NodeJS.Timeout | null = null;
@@ -121,6 +123,11 @@ export default function RegisterPage() {
             if (!loginRes.ok) {
                 const data = await loginRes.json().catch(() => null);
                 throw new Error(data?.error || "Login failed after verification");
+            }
+
+            const me = await refreshUser();
+            if (!me) {
+                throw new Error("Session could not be loaded. Try signing in.");
             }
 
             toast.success("Account created successfully");

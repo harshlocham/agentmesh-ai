@@ -1,7 +1,7 @@
-import Message, { IMessagePopulated } from "@/models/Message";
+import Message, { IMessagePopulated } from "@chat/db/models/Message";
 import { Types } from "mongoose";
-import { IMessage } from "@/models/Message";
-import { connectToDatabase } from "@/lib/Db/db";
+import { IMessage } from "@chat/db/models/Message";
+import { connectToDatabase } from "@chat/db";
 
 export async function getPaginatedMessages(conversationId: string, cursor?: string, limit = 20) {
     const query: { conversationId: Types.ObjectId; _id?: { $lt: Types.ObjectId } } = { conversationId: new Types.ObjectId(conversationId) };

@@ -54,9 +54,13 @@ jobs:
       previous_release_tag: ${{ steps.meta.outputs.previous_release_tag }}
       target: ${{ steps.meta.outputs.target }}
       image: ${{ steps.meta.outputs.image }}
+      legacy_image: ${{ steps.meta.outputs.legacy_image }}
       version_tag: ${{ steps.meta.outputs.version_tag }}
       sha_tag: ${{ steps.meta.outputs.sha_tag }}
       latest_tag: ${{ steps.meta.outputs.latest_tag }}
+      legacy_version_tag: ${{ steps.meta.outputs.legacy_version_tag }}
+      legacy_sha_tag: ${{ steps.meta.outputs.legacy_sha_tag }}
+      legacy_latest_tag: ${{ steps.meta.outputs.legacy_latest_tag }}
 
     steps:
       - name: Print workflow_run context
@@ -234,7 +238,8 @@ jobs:
 
           TAG="${RELEASE_TAGS[0]}"
           VERSION="${TAG#v}"
-          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/chat-services"
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/chat-socket"
+          LEGACY_IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/chat-services"
           SHORT_SHA="$(git rev-parse --short=12 HEAD)"
 
           if [[ "$TAG" != "$EXPECTED_TAG" ]]; then
@@ -250,9 +255,13 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "legacy_image=$LEGACY_IMAGE" >> "$GITHUB_OUTPUT"
           echo "version_tag=$IMAGE:$VERSION" >> "$GITHUB_OUTPUT"
           echo "sha_tag=$IMAGE:sha-$SHORT_SHA" >> "$GITHUB_OUTPUT"
           echo "latest_tag=$IMAGE:latest" >> "$GITHUB_OUTPUT"
+          echo "legacy_version_tag=$LEGACY_IMAGE:$VERSION" >> "$GITHUB_OUTPUT"
+          echo "legacy_sha_tag=$LEGACY_IMAGE:sha-$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          echo "legacy_latest_tag=$LEGACY_IMAGE:latest" >> "$GITHUB_OUTPUT"
           echo "target=$TARGET" >> "$GITHUB_OUTPUT"
 
           PREVIOUS_TAG="$(git tag -l 'v[0-9]*' --sort=-v:refname | awk -v current="$TAG" '$0 != current { print; exit }')"
@@ -319,6 +328,15 @@ jobs:
             org.opencontainers.image.version=${{ needs.prepare.outputs.release_version }}
           provenance: false
 
+      - name: Publish compatibility aliases for legacy image name
+        run: |
+          set -euxo pipefail
+          docker buildx imagetools create \
+            -t "${{ needs.prepare.outputs.legacy_version_tag }}" \
+            -t "${{ needs.prepare.outputs.legacy_sha_tag }}" \
+            -t "${{ needs.prepare.outputs.legacy_latest_tag }}" \
+            "${{ needs.prepare.outputs.version_tag }}"
+
       - name: Ensure latest points to released version
         run: |
           set -euxo pipefail
@@ -332,6 +350,7 @@ jobs:
           echo "Published immutable tag: ${{ needs.prepare.outputs.version_tag }}"
           echo "Published commit tag:    ${{ needs.prepare.outputs.sha_tag }}"
           echo "Published moving tag:    ${{ needs.prepare.outputs.latest_tag }}"
+          echo "Published legacy tag:    ${{ needs.prepare.outputs.legacy_version_tag }}"
 
   deploy_staging:
     name: Deploy Staging

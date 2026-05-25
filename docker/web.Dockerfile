@@ -1,9 +1,14 @@
-FROM node:20-slim
+FROM node:22-slim
 WORKDIR /app
-COPY package*.json ./ package-lock.json ./
-COPY turbo.json tsconfig.json ./
-RUN npm install --legacy-peer-deps
-RUN npm run build --workspace=@chat/types
-RUN npm run build --workspace=@chat/web
+
+RUN corepack enable
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc turbo.json tsconfig.json ./
+COPY apps ./apps
+COPY packages ./packages
+RUN pnpm install --frozen-lockfile
+RUN pnpm --filter @chat/types build
+RUN pnpm --filter @chat/services build
+RUN pnpm --filter @chat/web build
 EXPOSE 3000
-CMD ["npm", "run", "start", "--workspace=@chat/web"]
+CMD ["pnpm", "--filter", "@chat/web", "start"]

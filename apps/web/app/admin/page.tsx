@@ -97,6 +97,18 @@ export default function AdminDashboard() {
                         </Link>
                     </CardContent>
                 </Card>
+
+                <Card>
+                    <CardHeader>
+                        <CardTitle>Execution Governance</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        <p className="text-sm text-muted-foreground">Review pending AI execution requests and approve or reject them.</p>
+                        <Link href="/admin/task-approvals" className="mt-3 inline-block text-sm font-semibold underline">
+                            Open Task Approvals Queue
+                        </Link>
+                    </CardContent>
+                </Card>
             </div>
 
             {/* Charts Section */}

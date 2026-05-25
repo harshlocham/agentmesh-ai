@@ -1,4 +1,4 @@
-import { Types } from "mongoose";
+import { connection, Types } from "mongoose";
 import { AuthEventModel, AuthEventType } from "../repositories/authEventModel";
 
 type AuthAuditInput = {
@@ -27,6 +27,14 @@ function normalizeOptionalText(value?: string, maxLength = 512): string | undefi
 
 export async function logAuthEventBestEffort(input: AuthAuditInput): Promise<void> {
     try {
+        if (connection.readyState !== 1) {
+            return;
+        }
+
+        if (input.userId && !Types.ObjectId.isValid(input.userId)) {
+            return;
+        }
+
         await AuthEventModel.create({
             eventType: input.eventType,
             outcome: input.outcome,

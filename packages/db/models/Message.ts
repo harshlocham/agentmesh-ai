@@ -32,6 +32,15 @@ export interface IMessage {
     delivered?: boolean;
     seen?: boolean;
     status: "pending" | "failed" | "sent" | "delivered" | "seen" | "queued";
+    semanticType?: "chat" | "task" | "decision" | "reminder" | "unknown";
+    semanticConfidence?: number;
+    aiStatus?: "pending" | "classified" | "failed" | "overridden";
+    aiVersion?: string | null;
+    linkedTaskIds?: mongoose.Types.ObjectId[];
+    manualOverride?: boolean;
+    overrideBy?: mongoose.Types.ObjectId | null;
+    overrideAt?: Date | null;
+    semanticProcessedAt?: Date | null;
     updatedAt?: Date;
 }
 
@@ -78,6 +87,25 @@ const MessageSchema = new Schema<IMessage>({
         enum: ["pending", "failed", "sent", "delivered", "seen", "queued"],
         default: "pending",
     },
+    semanticType: {
+        type: String,
+        enum: ["chat", "task", "decision", "reminder", "unknown"],
+        default: "unknown",
+        index: true,
+    },
+    semanticConfidence: { type: Number, min: 0, max: 1, default: 0 },
+    aiStatus: {
+        type: String,
+        enum: ["pending", "classified", "failed", "overridden"],
+        default: "pending",
+        index: true,
+    },
+    aiVersion: { type: String, default: null },
+    linkedTaskIds: [{ type: Schema.Types.ObjectId, ref: "Task", index: true }],
+    manualOverride: { type: Boolean, default: false },
+    overrideBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+    overrideAt: { type: Date, default: null },
+    semanticProcessedAt: { type: Date, default: null },
     delivered: {
         type: Boolean,
         default: false,
@@ -98,6 +126,10 @@ const MessageSchema = new Schema<IMessage>({
 }, {
     timestamps: true,
 });
+
+MessageSchema.index({ conversationId: 1, semanticType: 1, createdAt: -1 });
+MessageSchema.index({ conversationId: 1, aiStatus: 1, createdAt: -1 });
+MessageSchema.index({ linkedTaskIds: 1, createdAt: -1 });
 
 const MessageModel: Model<IMessage> =
     (mongoose.models.Message as Model<IMessage>) ||

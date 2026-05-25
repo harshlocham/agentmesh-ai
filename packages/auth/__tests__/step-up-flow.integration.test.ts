@@ -10,7 +10,9 @@ const {
     createChallengeMock,
     getChallengeByIdMock,
     markChallengeVerifiedMock,
+    recordChallengeOtpMock,
     comparePasswordMock,
+    hashPasswordMock,
     generateAccessTokenMock,
     generateRefreshTokenMock,
     userFindByIdMock,
@@ -23,7 +25,9 @@ const {
     createChallengeMock: vi.fn(),
     getChallengeByIdMock: vi.fn(),
     markChallengeVerifiedMock: vi.fn(),
+    recordChallengeOtpMock: vi.fn(),
     comparePasswordMock: vi.fn(),
+    hashPasswordMock: vi.fn(),
     generateAccessTokenMock: vi.fn(),
     generateRefreshTokenMock: vi.fn(),
     userFindByIdMock: vi.fn(),
@@ -46,10 +50,15 @@ vi.mock("@/models/StepUpChallenge", () => ({
     createChallenge: createChallengeMock,
     getChallengeById: getChallengeByIdMock,
     markChallengeVerified: markChallengeVerifiedMock,
+    recordChallengeOtp: recordChallengeOtpMock,
 }));
 
 vi.mock("../password/compare", () => ({
     comparePassword: comparePasswordMock,
+}));
+
+vi.mock("../password/hash", () => ({
+    hashPassword: hashPasswordMock,
 }));
 
 vi.mock("../tokens/generate", () => ({
@@ -65,9 +74,11 @@ vi.mock("@/models/User", () => ({
 
 import { refreshService } from "../services/refresh.service";
 import { completePasswordStepUpChallenge } from "../services/step-up-password.service";
+import { completeOtpStepUpChallenge, requestOtpStepUpChallenge } from "../services/step-up-otp.service";
 
 type MockUserLeanResult = {
     _id: { toString(): string };
+    email?: string;
     password?: string;
     role?: "user" | "moderator" | "admin";
     status?: "active" | "banned";
@@ -90,6 +101,7 @@ describe("step-up authentication integration flow", () => {
         generateAccessTokenMock.mockReturnValue("next-access-token");
         generateRefreshTokenMock.mockReturnValue("next-refresh-token");
         rotateSessionTokenHashMock.mockResolvedValue({ _id: "session-1" });
+        hashPasswordMock.mockResolvedValue("hashed-otp");
     });
 
     it("1) normal refresh succeeds without challenge", async () => {
@@ -309,6 +321,134 @@ describe("step-up authentication integration flow", () => {
             })
         ).rejects.toThrow("Challenge is no longer valid");
 
+        expect(rotateSessionTokenHashMock).not.toHaveBeenCalled();
+    });
+
+    it("7) otp request stores a challenge code and returns delivery details", async () => {
+        getChallengeByIdMock.mockResolvedValue({
+            userId: "user-7",
+            status: "pending",
+            expiresAt: new Date(Date.now() + 60_000),
+            otp: undefined,
+        });
+
+        verifySessionMock.mockResolvedValue({
+            payload: {
+                sub: "user-7",
+                sessionId: "session-7",
+                tokenVersion: 3,
+            },
+        });
+
+        mockUserFindByIdResult({
+            _id: { toString: () => "user-7" },
+            email: "oauth@example.com",
+            role: "user",
+            status: "active",
+            tokenVersion: 3,
+        });
+
+        recordChallengeOtpMock.mockResolvedValue({
+            expiresAt: new Date(Date.now() + 60_000),
+        });
+
+        const result = await requestOtpStepUpChallenge({
+            challengeId: "challenge-7",
+            refreshToken: "refresh-token",
+        });
+
+        expect(result).toEqual({
+            challengeId: "challenge-7",
+            userId: "user-7",
+            email: "oauth@example.com",
+            otp: expect.any(String),
+            expiresAt: expect.any(Date),
+        });
+        expect(recordChallengeOtpMock).toHaveBeenCalledWith("challenge-7", "hashed-otp");
+    });
+
+    it("8) otp verification issues new tokens", async () => {
+        getChallengeByIdMock.mockResolvedValue({
+            userId: "user-8",
+            status: "pending",
+            expiresAt: new Date(Date.now() + 60_000),
+            otp: { hash: "otp-hash", sentAt: new Date() },
+        });
+
+        verifySessionMock.mockResolvedValue({
+            payload: {
+                sub: "user-8",
+                sessionId: "session-8",
+                tokenVersion: 6,
+            },
+        });
+
+        mockUserFindByIdResult({
+            _id: { toString: () => "user-8" },
+            email: "oauth@example.com",
+            role: "moderator",
+            status: "active",
+            tokenVersion: 6,
+        });
+
+        comparePasswordMock.mockResolvedValue(true);
+        markChallengeVerifiedMock.mockResolvedValue({ _id: "challenge-verified" });
+
+        const result = await completeOtpStepUpChallenge({
+            challengeId: "challenge-8",
+            otp: "123456",
+            refreshToken: "refresh-token",
+        });
+
+        expect(result).toEqual({
+            accessToken: "next-access-token",
+            refreshToken: "next-refresh-token",
+            userId: "user-8",
+            sessionId: "session-8",
+            challengeId: "challenge-8",
+        });
+        expect(markChallengeVerifiedMock).toHaveBeenCalledWith("challenge-8");
+        expect(rotateSessionTokenHashMock).toHaveBeenCalledWith(
+            "session-8",
+            expect.any(String)
+        );
+    });
+
+    it("9) otp verification rejects invalid codes", async () => {
+        getChallengeByIdMock.mockResolvedValue({
+            userId: "user-9",
+            status: "pending",
+            expiresAt: new Date(Date.now() + 60_000),
+            otp: { hash: "otp-hash", sentAt: new Date() },
+        });
+
+        verifySessionMock.mockResolvedValue({
+            payload: {
+                sub: "user-9",
+                sessionId: "session-9",
+                tokenVersion: 1,
+            },
+        });
+
+        mockUserFindByIdResult({
+            _id: { toString: () => "user-9" },
+            email: "oauth@example.com",
+            role: "user",
+            status: "active",
+            tokenVersion: 1,
+        });
+
+        comparePasswordMock.mockResolvedValue(false);
+
+        await expect(
+            completeOtpStepUpChallenge({
+                challengeId: "challenge-9",
+                otp: "000000",
+                refreshToken: "refresh-token",
+            })
+        ).rejects.toThrow("Invalid OTP");
+
+        expect(markChallengeVerifiedMock).not.toHaveBeenCalled();
         expect(rotateSessionTokenHashMock).not.toHaveBeenCalled();
     });
 });

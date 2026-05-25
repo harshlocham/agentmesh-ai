@@ -1,0 +1,35 @@
+{
+    "extends": "../../tsconfig.json",
+    "compilerOptions": {
+        "baseUrl": "../..",
+        "paths": {
+            "@chat/services/*": [
+                "packages/services/*",
+                "packages/services/dist/services/*"
+            ],
+            "@chat/services/*.js": [
+                "packages/services/*.js",
+                "packages/services/dist/services/*.js"
+            ],
+            "@chat/db/models/*": [
+                "packages/db/models/*.ts",
+                "packages/db/models/*.js"
+            ]
+        },
+        "ignoreDeprecations": "5.0",
+        "target": "ES2022",
+        "module": "Node16",
+        "moduleResolution": "node16",
+        "noEmit": true,
+        "types": [
+            "node"
+        ]
+    },
+    "include": [
+        "./**/*.ts"
+    ],
+    "exclude": [
+        "dist",
+        "node_modules"
+    ]
+}

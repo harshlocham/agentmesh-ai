@@ -5,7 +5,7 @@ import {
     invalidateMultipleUserTokens,
     getUserTokenVersion,
     isTokenVersionValid,
-} from "@chat/auth";
+} from "../tokens/invalidate.js";
 
 // Mocks
 vi.mock("@/models/User");

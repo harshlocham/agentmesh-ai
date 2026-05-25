@@ -1,10 +1,11 @@
 import type { ClientUser } from "../user/user";
+import type { MessageTaskMetadata } from "../task/task";
 
 export interface ClientReaction {
     emoji: string;
     users: ClientUser[];
 }
-export interface ClientMessage {
+export interface ClientMessage extends MessageTaskMetadata {
     _id: string;
     conversationId: string;
 

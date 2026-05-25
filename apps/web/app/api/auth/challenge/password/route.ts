@@ -92,18 +92,20 @@ export async function POST(req: NextRequest) {
             reason === "Challenge not found"
                 ? 404
                 : reason === "Challenge expired" ||
-                  reason === "Challenge is not pending" ||
-                  reason === "Challenge is no longer valid"
-                ? 409
-                : reason === "Invalid password" ||
-                  reason === "Invalid session" ||
-                  reason === "Session revoked" ||
-                  reason === "Session expired" ||
-                  reason === "Invalid session token" ||
-                  reason === "Invalid refresh token payload" ||
-                  reason === "Invalid refresh token"
-                ? 401
-                : 400;
+                    reason === "Challenge is not pending" ||
+                    reason === "Challenge is no longer valid"
+                    ? 409
+                    : reason === "Password authentication not available for this account"
+                        ? 422
+                        : reason === "Invalid password" ||
+                            reason === "Invalid session" ||
+                            reason === "Session revoked" ||
+                            reason === "Session expired" ||
+                            reason === "Invalid session token" ||
+                            reason === "Invalid refresh token payload" ||
+                            reason === "Invalid refresh token"
+                            ? 401
+                            : 400;
 
         await logAuthEventBestEffort({
             eventType: "step_up_failed",

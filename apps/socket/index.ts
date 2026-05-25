@@ -13,45 +13,10 @@ import {
     hasValidInternalSecret,
     INTERNAL_SECRET_HEADER,
 } from "@chat/types/utils/internal-bridge-auth";
-
-function parseAllowedOrigins(raw: string | undefined): string[] {
-    if (!raw) return [];
-    return raw
-        .split(",")
-        .map((origin) => origin.trim())
-        .filter(Boolean);
-}
-
-function isOriginAllowed(origin: string | undefined, allowedOrigins: string[]) {
-    if (!origin) {
-        return true;
-    }
-
-    if (allowedOrigins.includes("*") || allowedOrigins.includes(origin)) {
-        return true;
-    }
-
-    if (process.env.NODE_ENV !== "production") {
-        if (origin.startsWith("exp://")) {
-            return true;
-        }
-
-        if (
-            origin.startsWith("http://localhost:")
-            || origin.startsWith("http://127.0.0.1:")
-            || origin.startsWith("http://10.")
-            || origin.startsWith("http://192.168.")
-        ) {
-            return true;
-        }
-
-        if (allowedOrigins.length === 0) {
-            return true;
-        }
-    }
-
-    return false;
-}
+import {
+    isOriginAllowed,
+    parseCommaSeparatedValues,
+} from "./server/socket/utils/url.js";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const visitedEnvPaths = new Set<string>();
@@ -74,7 +39,7 @@ for (let depth = 0; depth < 8; depth++) {
 
 
 const app = express();
-const allowedOrigins = parseAllowedOrigins(process.env.ORIGIN);
+const allowedOrigins = parseCommaSeparatedValues(process.env.ORIGIN);
 app.use(cors({
     origin: (origin, callback) => {
         if (isOriginAllowed(origin, allowedOrigins)) {
@@ -191,6 +156,62 @@ app.post("/internal/conversation-created", (req, res) => {
     return res.json({ success: true });
 });
 
-server.listen(3001, () => {
-    console.log("🚀 Server running on http://localhost:3001");
+app.post("/internal/task-created", (req, res) => {
+    const { conversationId, payload } = req.body || {};
+
+    if (!conversationId || !payload) {
+        return res.status(400).json({ error: "Invalid payload" });
+    }
+
+    emitToConversation(conversationId, SocketEvents.TASK_CREATED, payload);
+    return res.json({ success: true });
+});
+
+app.post("/internal/task-updated", (req, res) => {
+    const { conversationId, payload } = req.body || {};
+
+    if (!conversationId || !payload) {
+        return res.status(400).json({ error: "Invalid payload" });
+    }
+
+    emitToConversation(conversationId, SocketEvents.TASK_UPDATED, payload);
+    return res.json({ success: true });
+});
+
+app.post("/internal/task-linked-to-message", (req, res) => {
+    const { conversationId, payload } = req.body || {};
+
+    if (!conversationId || !payload) {
+        return res.status(400).json({ error: "Invalid payload" });
+    }
+
+    emitToConversation(conversationId, SocketEvents.TASK_LINKED_TO_MESSAGE, payload);
+    return res.json({ success: true });
+});
+
+app.post("/internal/task-execution-updated", (req, res) => {
+    const { conversationId, payload } = req.body || {};
+
+    if (!conversationId || !payload) {
+        return res.status(400).json({ error: "Invalid payload" });
+    }
+
+    emitToConversation(conversationId, SocketEvents.TASK_EXECUTION_UPDATED, payload);
+    return res.json({ success: true });
+});
+
+app.post("/internal/message-semantic-updated", (req, res) => {
+    const { conversationId, payload } = req.body || {};
+
+    if (!conversationId || !payload) {
+        return res.status(400).json({ error: "Invalid payload" });
+    }
+
+    emitToConversation(conversationId, SocketEvents.MESSAGE_SEMANTIC_UPDATED, payload);
+    return res.json({ success: true });
+});
+
+const port = parseInt(process.env.PORT || '3001', 10);
+server.listen(port, '0.0.0.0', () => {
+    console.log(`🚀 Server running on http://0.0.0.0:${port}`);
 });

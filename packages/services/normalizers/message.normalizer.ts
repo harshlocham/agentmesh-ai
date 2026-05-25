@@ -1,5 +1,5 @@
 import type { MessageDTO } from "@chat/types";
-import { IMessagePopulated } from "@/models/Message";
+import { IMessagePopulated } from "@chat/db/models/Message";
 
 type Stringable = { toString(): string };
 type ReactionUser = string | (Stringable & { _id?: string | Stringable });
@@ -54,6 +54,18 @@ export function normalizeMessage(doc: IMessagePopulated): MessageDTO {
         updatedAt: doc.updatedAt
             ? new Date(doc.updatedAt).toISOString()
             : undefined,
+
+        semanticType: doc.semanticType,
+        semanticConfidence: doc.semanticConfidence,
+        aiStatus: doc.aiStatus,
+        aiVersion: doc.aiVersion ?? null,
+        linkedTaskIds: doc.linkedTaskIds?.map((taskId) => taskId.toString()) ?? [],
+        manualOverride: doc.manualOverride,
+        overrideBy: doc.overrideBy ? doc.overrideBy.toString() : null,
+        overrideAt: doc.overrideAt ? new Date(doc.overrideAt).toISOString() : null,
+        semanticProcessedAt: doc.semanticProcessedAt
+            ? new Date(doc.semanticProcessedAt).toISOString()
+            : null,
 
         isDeleted: doc.isDeleted,
         isEdited: doc.isEdited,

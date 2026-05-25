@@ -27,16 +27,17 @@ export function presenceHandler(io: IO, socket: Socket, redis: Redis) {
 
     void (async () => {
         try {
-            const { becameOnline } = await trackSocketConnected(redis, userId, socket.id);
+            await trackSocketConnected(redis, userId, socket.id);
 
             const activeUsers = await getActiveUsers(redis);
             for (const activeUserId of activeUsers) {
                 socket.emit(SocketEvents.USER_ONLINE, { userId: activeUserId });
             }
 
-            if (becameOnline) {
-                io.emit(SocketEvents.USER_ONLINE, { userId });
-            }
+            // Always tell other sockets this user has a live connection (new tab, reconnect,
+            // or first connect). Relying only on becameOnline missed multi-tab joins and
+            // left peers stale until they reloaded.
+            socket.broadcast.emit(SocketEvents.USER_ONLINE, { userId });
         } catch (error) {
             console.error("presence connect error", error);
         }

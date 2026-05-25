@@ -1,6 +1,6 @@
 {
   "name": "@chat/auth",
-  "version": "2.2.0",
+  "version": "2.3.2",
   "private": true,
   "type": "module",
   "main": "./index.ts",
@@ -8,6 +8,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run -c vitest.config.ts",
+    "teypecheck": "tsc --noEmit",
     "test:watch": "vitest -c vitest.config.ts"
   },
   "dependencies": {

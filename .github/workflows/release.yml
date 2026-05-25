@@ -24,24 +24,26 @@ jobs:
       github.event.workflow_run.head_branch == 'main'
 
     steps:
+     
       - name: Checkout repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Enable Corepack
+        run: corepack enable
 
-      - name: Setup Node.js 22 with npm cache
+      - name: Setup Node.js 22 with pnpm cache
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: package-lock.json
+          cache: pnpm
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Build monorepo
-        run: npm run build
+        run: pnpm run build
 
       - name: Capture existing release tags on commit
         id: tag_before
@@ -53,16 +55,48 @@ jobs:
           echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
           echo "before_tags=$BEFORE_TAGS" >> "$GITHUB_OUTPUT"
 
-      - name: Version and release with Changesets
+      - name: Version with Changesets
         id: changesets
         uses: changesets/action@6a0a831ff30acef54f2c6aa1cbbc1096b066edaf # v1.7.0
         with:
-          version: npm run version-packages
-          publish:  npx changeset publish
-          createGithubReleases: true
+          version: pnpm run version-packages
+          publish: echo "skip publish"
+          createGithubReleases: false
           setupGitUser: true
         env:
           GITHUB_TOKEN: ${{ secrets.CHANGESETS_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Create Git Tag
+        id: create_tag
+        run: |
+          set -euo pipefail
+
+          # Read version from root package.json
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v$VERSION"
+
+          echo "Creating tag: $TAG"
+
+          # Ensure tags are up to date
+          git fetch --force --tags
+
+          # Determine current commit (checkout set to the release commit)
+          RELEASE_SHA="$(git rev-parse HEAD)"
+
+          if git rev-parse --verify "$TAG" >/dev/null 2>&1; then
+            EXISTING_TAG_SHA="$(git rev-parse "$TAG")"
+            if [ "$EXISTING_TAG_SHA" = "$RELEASE_SHA" ]; then
+              echo "Tag $TAG already exists on this commit; skipping tag creation"
+            else
+              echo "::error::Tag $TAG already exists and points to $EXISTING_TAG_SHA (expected $RELEASE_SHA)"
+              exit 1
+            fi
+          else
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Resolve release metadata
         id: metadata
@@ -122,8 +156,17 @@ jobs:
           echo "Release metadata generated:"
           cat release-metadata.env
 
+      - name: Create GitHub Release
+        if: steps.metadata.outputs.deployable == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.metadata.outputs.release_tag }}" \
+            --title "${{ steps.metadata.outputs.release_tag }}" \
+            --generate-notes
+
       - name: Upload release metadata artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@v4
         with:
           name: release-metadata
           path: release-metadata.env

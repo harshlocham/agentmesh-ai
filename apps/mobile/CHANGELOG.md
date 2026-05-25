@@ -1,5 +1,21 @@
 # mobile
 
+## 2.1.1
+
+### Patch Changes
+
+- 5a2cba8: - Socket: register message:send handlers; broadcast online status on connect; remove duplicate join/leave handlers
+  - Web: connect socket after login/register without reload; stop disconnecting on tab visibility changes
+  - Mobile: reconnect on app foreground instead of disconnecting in background
+  - Task worker: use @chat/services package imports so production start resolves modules correctly
+  - Root: Next 15.5.18 override, uuid 14, ESLint config baseDirectory for apps/web
+
+## 2.1.0
+
+### Minor Changes
+
+- 8a4de46: Added task management across the stack, including shared task models/types, task APIs and socket events, a real-time task panel in the web app, and an outbox-driven worker for task intelligence and execution.
+
 ## 2.0.0
 
 ### Major Changes

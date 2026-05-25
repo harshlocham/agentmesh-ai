@@ -1,5 +1,23 @@
 # @chat/types
 
+## 1.3.2
+
+### Patch Changes
+
+- dc73990: task-worker: unify LLM boundary, preserve step IO, add self-heal and clarification flows; redact policy decisions and improve execution updates
+
+## 1.3.1
+
+### Patch Changes
+
+- e3ad385: The system has been fully implemented to support multi-step execution with strict safety and hallucination prevention.d it can self-heal a failed tool execution by asking the LLM for a corrected decision before falling back to normal retry behavior. The planner now preserves step input/output from LLM plans and explicitly asks for template-ready step context
+
+## 1.3.0
+
+### Minor Changes
+
+- 8a4de46: Added task management across the stack, including shared task models/types, task APIs and socket events, a real-time task panel in the web app, and an outbox-driven worker for task intelligence and execution.
+
 ## 1.2.0
 
 ### Minor Changes

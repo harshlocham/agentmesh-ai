@@ -4,10 +4,9 @@ import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { Laugh, Mic, Plus, Send, Image as ImageIcon } from "lucide-react";
 import { Input } from "../ui/input";
 import { Button } from "../ui/button";
-import { authenticatedFetch, getMe } from "@/lib/utils/api";
+import { authenticatedFetch } from "@/lib/utils/api";
 import useChatStore from "@/store/chat-store";
 import { getSocket } from "@/lib/socket/socketClient";
-import { ClientUser } from "@chat/types";
 import { ImageUpload } from "../home/ImageUpload";
 import { toast } from "sonner"
 import { v4 as uuidv4 } from 'uuid';
@@ -17,6 +16,7 @@ import { useRateLimitHandler } from "@/lib/hooks/useRateLimitHandler";
 import useSocketStore from "@/store/useSocketStore";
 import { UIMessage } from "@chat/types";
 import { SocketEvents } from "@chat/types";
+import { useUser } from "@/context/UserContext";
 
 // 🧠 Small debounce util
 function debounce<T extends unknown[]>(fn: (...args: T) => void, delay: number) {
@@ -29,11 +29,19 @@ function debounce<T extends unknown[]>(fn: (...args: T) => void, delay: number) 
 
 const MessageInput = () => {
     const [msgText, setMsgText] = useState("");
-    const [me, setMe] = useState<ClientUser | null>(null);
     const [showImageUpload, setShowImageUpload] = useState(false);
     const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-    const { selectedConversation, addMessage, updateLastMessage, replaceTempMessage, editingMessage, clearEditingMessage, updateEditedMessage, repliedTo, clearReplyTo } = useChatStore();
+    const { user: me } = useUser();
+    const selectedConversation = useChatStore((s) => s.selectedConversation);
+    const addMessage = useChatStore((s) => s.addMessage);
+    const updateLastMessage = useChatStore((s) => s.updateLastMessage);
+    const replaceTempMessage = useChatStore((s) => s.replaceTempMessage);
+    const editingMessage = useChatStore((s) => s.editingMessage);
+    const clearEditingMessage = useChatStore((s) => s.clearEditingMessage);
+    const updateEditedMessage = useChatStore((s) => s.updateEditedMessage);
+    const repliedTo = useChatStore((s) => s.repliedTo);
+    const clearReplyTo = useChatStore((s) => s.clearReplyTo);
     const sel = useChatStore((s) => s.selectedConversationId);
     const isOnline = useNetworkStatus();
     const { addToQueue } = useOfflineStore();
@@ -48,18 +56,6 @@ const MessageInput = () => {
     );
     const activeReply = sel ? repliedTo[sel] : undefined;
 
-    //  Fetch logged-in user once
-    useEffect(() => {
-        const fetchMe = async () => {
-            try {
-                const response = await getMe();
-                setMe(response);
-            } catch (error) {
-                console.error("Failed to fetch user data", error);
-            }
-        };
-        fetchMe();
-    }, []);
     useEffect(() => {
         if (editingMessage) {
             setMsgText(editingMessage.content);

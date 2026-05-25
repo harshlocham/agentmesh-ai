@@ -69,7 +69,8 @@ const ChatBubble = ({
     showAvatar = true,
     showUsername = true,
 }: ChatBubbleProps) => {
-    const { selectedConversation, setEditingMessage } = useChatStore();
+    const selectedConversation = useChatStore((s) => s.selectedConversation);
+    const setEditingMessage = useChatStore((s) => s.setEditingMessage);
     const [showReactions, setShowReactions] = useState(false);
     //const [hovered, setHovered] = useState(false);
     const senderId =

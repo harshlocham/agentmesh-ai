@@ -1,9 +1,9 @@
 {
   "name": "mobile",
-  "version": "2.0.0",
+  "version": "2.1.1",
   "main": "index.ts",
   "scripts": {
-    "start": "expo start",
+    "start:mobile": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
@@ -17,12 +17,13 @@
     "@react-navigation/stack": "^7.8.9",
     "@tanstack/query-core": "^5.96.2",
     "@tanstack/react-query": "^5.96.2",
-    "axios": "^1.13.0",
+    "axios": "^1.16.0",
     "babel-preset-expo": "~54.0.10",
     "expo": "~54.0.33",
     "expo-application": "~7.0.8",
     "expo-secure-store": "~15.0.8",
     "expo-status-bar": "~3.0.9",
+    "metro-runtime": "^0.84.3",
     "nativewind": "4.2.3",
     "prettier-plugin-tailwindcss": "^0.5.14",
     "react": "19.1.0",
@@ -37,6 +38,7 @@
     "zustand": "^5.0.12"
   },
   "devDependencies": {
+    "@chat/types": "workspace:*",
     "@types/react": "~19.1.0",
     "babel-plugin-module-resolver": "^5.0.3",
     "typescript": "~5.9.2"

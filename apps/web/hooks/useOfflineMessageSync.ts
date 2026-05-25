@@ -10,7 +10,9 @@ import { authenticatedFetch } from "@/lib/utils/api";
 
 export function useOfflineMessageSync() {
     const isOnline = useNetworkStatus();
-    const { offlineQueue, loadQueue, removeFromQueue } = useOfflineStore();
+    const offlineQueue = useOfflineStore((s) => s.offlineQueue);
+    const loadQueue = useOfflineStore((s) => s.loadQueue);
+    const removeFromQueue = useOfflineStore((s) => s.removeFromQueue);
     const isResending = useRef(false);
     const [socketConnected, setSocketConnected] = useState(socket.connected);
     const replaceTempMessage = useChatStore((s) => s.replaceTempMessage);

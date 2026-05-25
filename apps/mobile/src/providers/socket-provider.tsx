@@ -127,8 +127,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
             appStateRef.current = nextState;
 
             if (nextState !== "active") {
-                stopHeartbeat();
-                socketClient.disconnect();
+                // Do not disconnect on background: that broadcast USER_OFFLINE to peers
+                // while the user is still using the app (other tab / return soon). OS may
+                // still suspend the socket; reconnect path runs when active again.
                 return;
             }
 

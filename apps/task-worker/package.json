@@ -1,0 +1,24 @@
+{
+    "name": "@chat/task-worker",
+    "version": "2.0.5",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "dev": "tsx index.ts",
+        "build": "tsc --noEmit false --outDir dist",
+        "start": "node dist/apps/task-worker/index.js",
+        "typecheck": "tsc --noEmit -p tsconfig.json",
+        "test": "INTERNAL_SECRET=test-internal-secret tsx --test tests/**/*.test.ts"
+    },
+    "dependencies": {
+        "@chat/db": "workspace:*",
+        "@chat/services": "workspace:*",
+        "@chat/types": "workspace:*",
+        "dotenv": "^17.2.3",
+        "openai": "^4.11.0",
+        "ioredis": "^5.10.0",
+        "mongoose": "^8.16.2",
+        "tsx": "^4.21.0",
+        "zod": "^3.24.1"
+    }
+}

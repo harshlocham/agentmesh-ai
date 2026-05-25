@@ -2,14 +2,10 @@ import { Server as SocketIOServer } from "socket.io";
 import type { Server as HTTPServer } from "http";
 import { createAdapter } from "@socket.io/redis-adapter";
 import type { RedisAdapterClients } from "./redis.js";
-
-function parseAllowedOrigins(raw: string | undefined): string[] {
-    if (!raw) return [];
-    return raw
-        .split(",")
-        .map((origin) => origin.trim())
-        .filter(Boolean);
-}
+import {
+    isOriginAllowed,
+    parseCommaSeparatedValues,
+} from "./utils/url.js";
 
 function isOriginAllowed(origin: string | undefined, allowedOrigins: string[]) {
     if (!origin) {
@@ -46,7 +42,7 @@ export function initIO(
     httpServer: HTTPServer,
     redis: RedisAdapterClients
 ) {
-    const allowedOrigins = parseAllowedOrigins(process.env.ORIGIN);
+    const allowedOrigins = parseCommaSeparatedValues(process.env.ORIGIN);
 
     const io = new SocketIOServer(httpServer, {
         path: "/api/socket",

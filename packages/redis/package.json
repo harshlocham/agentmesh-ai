@@ -6,7 +6,7 @@
         "typecheck": "tsc --noEmit"
     },
     "dependencies": {
-        "@chat/types": "*",
+        "@chat/types": "workspace:*",
         "redis": "^5.9.0",
         "ioredis": "^5.10.0",
         "@upstash/redis": "^1.35.6",

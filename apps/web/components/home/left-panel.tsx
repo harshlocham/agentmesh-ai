@@ -6,13 +6,13 @@ import { Input } from "../ui/input";
 import ThemeSwitch from "./theme-switch";
 import UserListDialog from "./dialogs/user-list-dialog";
 import UserProfile from "./userProfile";
-import { getConversations } from "@/lib/utils/api";
 import useChatStore from "@/store/chat-store";
-import { ClientUser } from "@chat/types";
+import { ClientUser, ClientConversation } from "@chat/types";
 import VirtualConversationList from "../sidebar/VirtualConversationList";
 import { socket } from "@/lib/socket/socketClient";
 import { useRouter } from "next/navigation";
 import { authenticatedFetch } from "@/lib/utils/api";
+import { recordApiTiming } from "@/lib/utils/performance";
 
 function isUser(p: unknown): p is ClientUser {
     return typeof p === "object" && p !== null && "username" in p;
@@ -21,6 +21,7 @@ function isUser(p: unknown): p is ClientUser {
 interface SidebarProps {
     isMobileOpen?: boolean;
     onMobileClose?: () => void;
+    initialConversations?: ClientConversation[];
 }
 
 const Sidebar = ({
@@ -34,29 +35,94 @@ const Sidebar = ({
     const [search, setSearch] = useState("");
     const [debouncedSearch, setDebouncedSearch] = useState("");
     const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
+    const [fetchError, setFetchError] = useState<string | null>(null);
+
+    // Fetch conversations with explicit cancellation and retry handling.
+    useEffect(() => {
+        const controller = new AbortController();
+        let timeoutId: ReturnType<typeof setTimeout> | null = null;
+        let active = true;
+
+        const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+        const isRetryable = (error: unknown) => {
+            if (error instanceof DOMException && error.name === "AbortError") {
+                return false;
+            }
+
+            return error instanceof TypeError || error instanceof SyntaxError || error instanceof Error;
+        };
+
+        const fetchConversations = async () => {
+            try {
+                setLoading(true);
+                setFetchError(null);
+
+                timeoutId = setTimeout(() => controller.abort(), 10000);
+
+                let lastError: unknown = null;
+
+                for (let attempt = 0; attempt < 2; attempt += 1) {
+                    try {
+                        const startedAt = performance.now();
+                        const response = await authenticatedFetch("/api/conversations", {
+                            signal: controller.signal,
+                        });
+
+                        const rawText = await response.text();
+
+                        if (!response.ok) {
+                            throw new Error(rawText || `Failed to load conversations (${response.status})`);
+                        }
+
+                        const parsed = rawText ? JSON.parse(rawText) : [];
+                        const conversations = Array.isArray(parsed) ? parsed : (parsed.conversations ?? []);
+
+                        recordApiTiming("/api/conversations", performance.now() - startedAt);
+
+                        if (!controller.signal.aborted && active) {
+                            setConversations(conversations || []);
+                        }
+                        return;
+                    } catch (error) {
+                        lastError = error;
+                        if (controller.signal.aborted || !isRetryable(error) || attempt === 1) {
+                            throw error;
+                        }
+
+                        await sleep(250 * (attempt + 1));
+                    }
+                }
+
+                throw lastError ?? new Error("Failed to load conversations");
+            } catch (err) {
+                if (controller.signal.aborted || (err instanceof DOMException && err.name === "AbortError")) {
+                    return;
+                }
+
+                console.error("Failed to fetch conversations:", err);
+                setFetchError("Unable to load conversations. Tap to retry.");
+            } finally {
+                if (timeoutId) clearTimeout(timeoutId);
+                if (!controller.signal.aborted && active) {
+                    setLoading(false);
+                }
+            }
+        };
+
+        fetchConversations();
+
+        return () => {
+            active = false;
+            if (timeoutId) clearTimeout(timeoutId);
+            controller.abort();
+        };
+    }, [setConversations]);
 
     useEffect(() => {
         const handler = setTimeout(() => setDebouncedSearch(search.trim()), 300);
         return () => clearTimeout(handler);
     }, [search]);
-
-    useEffect(() => {
-        const fetchConversations = async () => {
-            try {
-                setLoading(true);
-                const data = await getConversations();
-                setConversations(data);
-            } catch (err) {
-                console.error(err);
-                setError("Unable to load conversations");
-            } finally {
-                setLoading(false);
-            }
-        };
-
-        fetchConversations();
-    }, [setConversations]);
 
     const filteredConversations = useMemo(() => {
         const term = debouncedSearch.toLowerCase();
@@ -178,20 +244,20 @@ const Sidebar = ({
                     </div>
                 )}
 
-                {!loading && error && (
+                {!loading && fetchError && (
                     <p className="mt-6 text-center text-sm text-red-500">
-                        {error}
+                        {fetchError}
                     </p>
                 )}
 
-                {!loading && !error && filteredConversations.length === 0 && (
+                {!loading && !fetchError && filteredConversations.length === 0 && (
                     <div className="mt-6 text-center text-sm text-[hsl(var(--muted-foreground))]">
                         No conversations found
                     </div>
                 )}
 
                 <div className="flex-1 overflow-hidden">
-                    {!loading && !error && <VirtualConversationList />}
+                    {!loading && !fetchError && filteredConversations.length > 0 && <VirtualConversationList />}
                 </div>
             </div>
         </>
@@ -200,17 +266,15 @@ const Sidebar = ({
     return (
         <>
             <div
-                className={`fixed inset-0 z-40 bg-black/40 transition-opacity duration-300 lg:hidden ${
-                    isMobileOpen ? "opacity-100" : "pointer-events-none opacity-0"
-                }`}
+                className={`fixed inset-0 z-40 bg-black/40 transition-opacity duration-300 lg:hidden ${isMobileOpen ? "opacity-100" : "pointer-events-none opacity-0"
+                    }`}
                 onClick={onMobileClose}
                 aria-hidden="true"
             />
 
             <aside
-                className={`fixed inset-0 z-50 flex h-full w-full flex-col border-r border-[hsl(var(--border))] bg-[hsl(var(--left-panel))] text-[hsl(var(--foreground))] shadow-lg transition-transform duration-300 ease-out lg:hidden ${
-                    isMobileOpen ? "translate-x-0" : "-translate-x-full"
-                }`}
+                className={`fixed inset-0 z-50 flex h-full w-full flex-col border-r border-[hsl(var(--border))] bg-[hsl(var(--left-panel))] text-[hsl(var(--foreground))] shadow-lg transition-transform duration-300 ease-out lg:hidden ${isMobileOpen ? "translate-x-0" : "-translate-x-full"
+                    }`}
                 role="dialog"
                 aria-modal="true"
                 aria-label="Conversations"

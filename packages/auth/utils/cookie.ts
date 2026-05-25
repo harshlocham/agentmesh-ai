@@ -4,6 +4,7 @@ type CookieOptions = {
     httpOnly?: boolean;
     secure?: boolean;
     sameSite?: "lax" | "strict" | "none";
+    domain?: string;
     path?: string;
     maxAge?: number;
 };
@@ -16,6 +17,10 @@ function serializeCookie(name: string, value: string, options: CookieOptions = {
     }
 
     parts.push("Path=" + (options.path || "/"));
+
+    if (options.domain) {
+        parts.push("Domain=" + options.domain);
+    }
 
     if (options.httpOnly !== false) {
         parts.push("HttpOnly");
@@ -30,10 +35,19 @@ function serializeCookie(name: string, value: string, options: CookieOptions = {
     return parts.join("; ");
 }
 
+function resolveCookieDomain(): string | undefined {
+    const raw = process.env.COOKIE_DOMAIN?.trim();
+    if (!raw) return undefined;
+
+    // Keep domain explicit and deterministic for cross-subdomain auth cookies.
+    return raw;
+}
+
 export function buildAccessTokenCookie(token: string, maxAgeSeconds = 15 * 60): string {
     return serializeCookie(authConfig.cookie.accessToken, token, {
         maxAge: maxAgeSeconds,
         path: "/",
+        domain: resolveCookieDomain(),
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
         sameSite: "lax",
@@ -47,6 +61,7 @@ export function buildRefreshTokenCookie(
     return serializeCookie(authConfig.cookie.refreshToken, token, {
         maxAge: maxAgeSeconds,
         path: "/",
+        domain: resolveCookieDomain(),
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
         sameSite: "lax",
@@ -57,6 +72,7 @@ export function buildExpiredCookie(name: string): string {
     return serializeCookie(name, "", {
         maxAge: 0,
         path: "/",
+        domain: resolveCookieDomain(),
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
         sameSite: "lax",

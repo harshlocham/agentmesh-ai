@@ -16,6 +16,12 @@
       "@/lib/services/*": [
         "../../packages/services/*"
       ],
+      "@chat/services/*": [
+        "../../packages/services/*"
+      ],
+      "@chat/db/models/*": [
+        "../../packages/db/models/*"
+      ],
       "@/lib/repositories/*": [
         "../../packages/services/repositories/*"
       ],

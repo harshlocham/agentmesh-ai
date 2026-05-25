@@ -40,8 +40,8 @@ export async function POST(req: Request) {
         expiresAt: { $gt: new Date() },
     })
         .sort({ createdAt: -1 })
-        .select("_id")
-        .lean<{ _id: { toString(): string } } | null>();
+        .select("_id verificationMethod")
+        .lean<{ _id: { toString(): string }; verificationMethod: "password" | "otp" } | null>();
 
     if (!challenge) {
         return NextResponse.json({ requiresStepUp: false });
@@ -50,5 +50,6 @@ export async function POST(req: Request) {
     return NextResponse.json({
         requiresStepUp: true,
         challengeId: challenge._id.toString(),
+        verificationMethod: challenge.verificationMethod,
     });
 }

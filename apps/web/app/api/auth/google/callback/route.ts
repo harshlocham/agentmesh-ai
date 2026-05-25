@@ -46,6 +46,18 @@ function cleanupOAuthCookies(response: NextResponse) {
 }
 
 function toLoginErrorCode(message: string): string {
+    if (message.includes("redirect_uri_mismatch")) {
+        return "google_redirect_uri_mismatch";
+    }
+
+    if (message.includes("invalid_grant")) {
+        return "google_invalid_grant";
+    }
+
+    if (message.startsWith("Google token exchange failed:")) {
+        return "google_token_exchange_failed";
+    }
+
     if (message === "GOOGLE_ACCOUNT_NOT_LINKED") {
         return "google_account_not_linked";
     }
@@ -136,6 +148,12 @@ export async function GET(req: NextRequest) {
         return response;
     } catch (error) {
         const message = error instanceof Error ? error.message : "google_oauth_failed";
+        if (process.env.NODE_ENV !== "production") {
+            console.error("[auth][google-callback]", {
+                message,
+                redirectUri: getRedirectUri(req),
+            });
+        }
         await logAuthEventBestEffort({
             eventType: "google_oauth_failed",
             outcome: "failure",

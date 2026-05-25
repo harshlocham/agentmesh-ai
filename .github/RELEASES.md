@@ -19,7 +19,7 @@ This repository uses a three-stage release pipeline:
 - `deploy.yml` (`Deploy`)
   - Runs after successful `Release` and also supports manual promotions via `workflow_dispatch`.
   - Verifies metadata and tag integrity.
-  - Builds immutable image tags and updates `latest`.
+  - Builds and pushes the dedicated `chat-socket` image tags, updates `latest`, and publishes legacy `chat-services` aliases for compatibility.
   - Deploys to `staging` and/or `production` based on promotion target.
   - For `deploy_target=both`, enforces strict sequence: staging success -> explicit promotion approval -> production.
   - Uses GitHub Deployments API checks to prevent redeploying the same commit to the same environment.

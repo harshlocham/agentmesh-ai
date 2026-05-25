@@ -3,7 +3,7 @@ import Providers from "./providers";
 import type { Metadata, Viewport } from "next";
 
 export const metadata: Metadata = {
-  title: "Chat App",
+  title: "AgentMesh AI",
   description: "A real-time chat application built with Next.js, Socket.IO, and MongoDB.",
   icons: {
     icon: [{ url: "/favicon.png?v=2", type: "image/png" }],

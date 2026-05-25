@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { IUser } from "./User";
+import { IUser } from "@chat/db/models/User";
 
 export interface ITempMessage {
     _id: string;

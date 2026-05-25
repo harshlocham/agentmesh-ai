@@ -1,43 +1,133 @@
-// src/lib/services/message.service.ts
 'use server';
-import * as messageRepo from "@/lib/repositories/message.repo";
 import { CreateMessageInput } from "@/lib/validators/message.schema";
-import { Types } from "mongoose";
-import { Conversation } from "@/models/Conversation";
-import Message, { IMessagePopulated } from "@/models/Message";
-import { connectToDatabase } from "@/lib/Db/db";
+import mongoose, { Types } from "mongoose";
+import { Conversation } from "@chat/db/models/Conversation";
+import Message, { IMessagePopulated } from "@chat/db/models/Message";
+import { assertConversationAccess } from "./authorization.service";
+import { enqueueOutboxEvent } from "./outbox.service";
 //import { socket } from "@/lib/socket/socketClient";
 
 export async function createMessage(data: CreateMessageInput, senderId: string) {
-    await connectToDatabase();
+    await assertConversationAccess(senderId, data.conversationId);
 
-    // correctly map senderId → sender
-    const toSave: Parameters<typeof messageRepo.saveMessage>[0] = {
-        sender: new Types.ObjectId(senderId),
-        conversationId: new Types.ObjectId(data.conversationId),
-        content: data.content,
-        messageType: data.messageType ?? "text",
-        status: "sent",
-        delivered: false,
-        seen: false,
-        ...(data.replyTo ? { repliedTo: new Types.ObjectId(data.replyTo) } : {}),
+    const conversationId = new Types.ObjectId(data.conversationId);
+    const senderObjectId = new Types.ObjectId(senderId);
+
+    let savedMessageId: Types.ObjectId | null = null;
+
+    const createWithOutboxNoTxn = async () => {
+        const conversation = await Conversation.findById(conversationId);
+        if (!conversation) {
+            throw new Error("Conversation not found");
+        }
+
+        const saved = await Message.create({
+            sender: senderObjectId,
+            conversationId,
+            content: data.content,
+            messageType: data.messageType ?? "text",
+            status: "sent",
+            delivered: false,
+            seen: false,
+            ...(data.replyTo ? { repliedTo: new Types.ObjectId(data.replyTo) } : {}),
+        });
+
+        savedMessageId = saved._id;
+
+        conversation.lastMessage = {
+            _id: saved._id,
+            sender: saved.sender,
+            messageType: saved.messageType,
+            content: saved.content,
+            _creationTime: saved.createdAt ?? new Date(),
+        };
+        await conversation.save();
+
+        await enqueueOutboxEvent({
+            topic: "message.created",
+            dedupeKey: `message.created:${saved._id.toString()}`,
+            payload: {
+                messageId: saved._id.toString(),
+                conversationId: conversationId.toString(),
+                senderId,
+                content: saved.content,
+                messageType: saved.messageType,
+            },
+        });
     };
-    const conversation = await Conversation.findById(data.conversationId);
-    if (!conversation) {
-        throw new Error("Conversation not found");
+
+    const session = await mongoose.startSession();
+
+    try {
+        await session.withTransaction(async () => {
+            const conversation = await Conversation.findById(conversationId).session(session);
+            if (!conversation) {
+                throw new Error("Conversation not found");
+            }
+
+            const created = await Message.create(
+                [
+                    {
+                        sender: senderObjectId,
+                        conversationId,
+                        content: data.content,
+                        messageType: data.messageType ?? "text",
+                        status: "sent",
+                        delivered: false,
+                        seen: false,
+                        ...(data.replyTo ? { repliedTo: new Types.ObjectId(data.replyTo) } : {}),
+                    },
+                ],
+                { session }
+            );
+
+            const saved = created[0];
+            savedMessageId = saved._id;
+
+            conversation.lastMessage = {
+                _id: saved._id,
+                sender: saved.sender,
+                messageType: saved.messageType,
+                content: saved.content,
+                _creationTime: saved.createdAt ?? new Date(),
+            };
+            await conversation.save({ session });
+
+            await enqueueOutboxEvent({
+                topic: "message.created",
+                dedupeKey: `message.created:${saved._id.toString()}`,
+                payload: {
+                    messageId: saved._id.toString(),
+                    conversationId: conversationId.toString(),
+                    senderId,
+                    content: saved.content,
+                    messageType: saved.messageType,
+                },
+                session,
+            });
+        });
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const transactionUnsupported =
+            message.includes("Transaction numbers are only allowed")
+            || message.includes("replica set")
+            || message.includes("standalone");
+
+        if (!transactionUnsupported) {
+            throw error;
+        }
+
+        await createWithOutboxNoTxn();
+    } finally {
+        await session.endSession();
     }
-    const saved = await messageRepo.saveMessage(toSave);
-    conversation.lastMessage = {
-        _id: saved._id,
-        sender: saved.sender,
-        messageType: saved.messageType,
-        content: saved.content,
-        _creationTime: saved.createdAt ?? new Date(),
-    };
-    await conversation.save();
+
+    if (!savedMessageId) {
+        throw new Error("Failed to save message");
+    }
 
     // Populate sender and repliedTo so normalizeMessage can serialize them safely.
-    const populated = await Message.findById(saved._id)
+    const populated = await Message.findById(savedMessageId)
         .populate("sender", "username profilePicture _id")
         .populate({
             path: "repliedTo",

@@ -1,13 +1,14 @@
-import { dirname } from "path";
+import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { FlatCompat } from "@eslint/eslintrc";
 import importPlugin from "eslint-plugin-import";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const webAppDir = join(__dirname, "apps/web");
 
 const compat = new FlatCompat({
-  baseDirectory: __dirname,
+  baseDirectory: webAppDir,
 });
 
 const eslintConfig = [
@@ -24,19 +25,14 @@ const eslintConfig = [
         {
           zones: [
             {
-              target: "./src/components",
-              from: "./src/models",
-              message: "Client cannot import server models.",
+              target: "./components",
+              from: "./app/api",
+              message: "Client components cannot import API route handlers.",
             },
             {
-              target: "./src/components",
-              from: "./src/server",
-              message: "Client cannot import server code.",
-            },
-            {
-              target: "./src/server",
-              from: "./src/components",
-              message: "Server should not depend on UI.",
+              target: "./app/api",
+              from: "./components",
+              message: "API routes should not depend on UI components.",
             },
           ],
         },

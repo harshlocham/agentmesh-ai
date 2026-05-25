@@ -6,6 +6,7 @@ import {
     redirectToStepUpChallenge,
     refreshSession,
 } from "@/lib/utils/auth/client-session";
+import { ensureAuthReady } from "@/lib/auth/authBootstrap";
 
 type ApiErrorPayload = {
     error?: string;
@@ -38,6 +39,31 @@ export type AdminAuthEventsResponse = {
     };
 };
 
+export type TaskApprovalRecord = {
+    _id: string;
+    taskId: string;
+    conversationId: string;
+    actorType: "user" | "agent" | "system";
+    actorId: string | null;
+    actionType: string;
+    messageId: string | null;
+    parameters: Record<string, unknown>;
+    executionState: string | null;
+    summary: string | null;
+    error: string | null;
+    patch: {
+        before: unknown | null;
+        after: unknown | null;
+    };
+    reason: string;
+    idempotencyKey: string;
+    createdAt: string;
+};
+
+export type TaskApprovalsResponse = {
+    approvals: TaskApprovalRecord[];
+};
+
 function wait(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -47,6 +73,15 @@ export async function authenticatedFetch(
     init?: RequestInit,
     hasRetried = false
 ): Promise<Response> {
+    // Ensure auth bootstrap completes before attempting protected requests
+    // Skip waiting for the refresh endpoint itself to avoid deadlocks
+    if (url !== "/api/auth/refresh") {
+        try {
+            await ensureAuthReady();
+        } catch (err) {
+            console.warn("authenticatedFetch: ensureAuthReady failed", err);
+        }
+    }
     const response = await fetch(url, {
         ...init,
         credentials: "include",
@@ -189,4 +224,22 @@ export async function getAdminAuthEvents(params?: {
     );
 
     return data.data;
+}
+
+export async function getTaskApprovals(conversationId?: string): Promise<TaskApprovalsResponse> {
+    const query = conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : "";
+    return request<TaskApprovalsResponse>(`/api/task-approvals${query}`);
+}
+
+export async function decideTaskApproval(input: {
+    taskActionId: string;
+    decision: "approve" | "reject";
+    reason?: string;
+    reviewerComment?: string;
+    parameters?: Record<string, unknown>;
+}): Promise<{ approval: TaskApprovalRecord | null }> {
+    return request<{ approval: TaskApprovalRecord | null }>("/api/task-approvals", {
+        method: "POST",
+        body: JSON.stringify(input),
+    });
 }

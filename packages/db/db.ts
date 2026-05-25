@@ -1,7 +1,5 @@
 import mongoose, { Mongoose } from "mongoose";
 
-const MONGODB_URI = process.env.MONGODB_URI as string;
-
 // Extend NodeJS global type
 declare global {
     var mongooseCache: {
@@ -16,7 +14,9 @@ global.mongooseCache = global.mongooseCache || { conn: null, promise: null };
 const cached = global.mongooseCache;
 
 export async function connectToDatabase(): Promise<Mongoose> {
-    if (!MONGODB_URI) {
+    const mongoUri = process.env.MONGODB_URI as string | undefined;
+
+    if (!mongoUri) {
         throw new Error("Please define the MONGODB_URI environment variable in your .env file");
     }
     if (cached.conn) return cached.conn;
@@ -28,7 +28,7 @@ export async function connectToDatabase(): Promise<Mongoose> {
             serverSelectionTimeoutMS: 5000,
         };
 
-        cached.promise = mongoose.connect(MONGODB_URI, options);
+        cached.promise = mongoose.connect(mongoUri, options);
     }
 
     try {
@@ -40,7 +40,7 @@ export async function connectToDatabase(): Promise<Mongoose> {
 
     return cached.conn;
 }
-import { User } from "@/models/User";
+import { User } from "@chat/db/models/User";
 
 export interface UserFromDatabase {
     id: string;

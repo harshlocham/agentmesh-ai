@@ -55,7 +55,7 @@ export async function completePasswordStepUpChallenge({
     }
 
     if (!user.password) {
-        throw new Error("Password authentication not available");
+        throw new Error("Password authentication not available for this account");
     }
 
     const passwordMatches = await comparePassword(password, user.password);

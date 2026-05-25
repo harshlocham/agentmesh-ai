@@ -1,35 +1,27 @@
 {
   "name": "chat-app",
-  "version": "0.1.0",
+  "version": "2.0.8",
   "private": true,
   "type": "module",
-  "workspaces": [
-    "apps/mobile",
-    "apps/web",
-    "apps/socket",
-    "packages/auth",
-    "packages/types",
-    "packages/db",
-    "packages/redis",
-    "packages/services"
-  ],
-  "packageManager": "npm@10.9.2",
+  "packageManager": "pnpm@10.14.0",
   "scripts": {
-    "dev": "turbo run dev",
-    "mobile": "npm run start --workspace=mobile",
-    "build": "turbo run build",
-    "start": "turbo run start",
-    "lint": "turbo run lint",
-    "test": "turbo run test",
+    "dev": "turbo run dev --filter=./apps/* --filter=./packages/*",
+    "mobile": "pnpm --filter mobile run start:mobile",
+    "task-worker": "pnpm --filter @chat/task-worker dev",
+    "build": "turbo run build --filter=./apps/* --filter=./packages/*",
+    "start": "turbo run start --filter=./apps/* --filter=./packages/*",
+    "lint": "turbo run lint --filter=./apps/* --filter=./packages/*",
+    "test": "turbo run test --filter=./apps/* --filter=./packages/*",
     "clean": "turbo run clean",
     "clean:artifacts": "find apps packages -type d -name node_modules -prune -o -type d -name dist -prune -exec rm -rf '{}' + && find apps packages -type d -name node_modules -prune -o -type d -name build -prune -exec rm -rf '{}' + && find apps packages -type d -name node_modules -prune -o -type d -name .next -prune -exec rm -rf '{}' + && rm -rf .turbo && find apps packages -type d -name node_modules -prune -o -type f -name '*.tsbuildinfo' -delete",
-    "clean:all": "npm run clean:artifacts && find . -type d -name node_modules -prune -exec rm -rf '{}' +",
+    "clean:all": "pnpm run clean:artifacts && find . -type d -name node_modules -prune -exec rm -rf '{}' +",
     "changeset": "changeset",
     "version-packages": "changeset version",
     "release": "echo \"Skipping npm publish for private repository\"",
-    "typecheck": "turbo run typecheck",
+    "typecheck": "turbo run typecheck --filter=./apps/* --filter=./packages/*",
+    "seed:contacts": "tsx scripts/seed/contacts.ts",
     "ci:verify-artifacts": "bash ./scripts/ci/verify-artifacts.sh",
-    "security:audit": "npm audit --omit=dev --audit-level=high"
+    "security:audit": "pnpm audit --prod --audit-level high"
   },
   "devDependencies": {
     "@changesets/cli": "^2.30.0",
@@ -40,14 +32,17 @@
     "@types/nodemailer": "^7.0.2",
     "eslint": "^9",
     "eslint-plugin-import": "^2.32.0",
+    "react-is": "^18.0.0",
     "ts-node": "^10.9.2",
     "tsx": "^4.21.0",
     "turbo": "^2.8.17",
     "typescript": "^5.9.3"
   },
-  "overrides": {
-    "react": "19.1.0",
-    "react-dom": "19.1.0",
-    "next": "15.5.15"
+  "pnpm": {
+    "overrides": {
+      "react": "19.1.0",
+      "react-dom": "19.1.0",
+      "next": "15.5.18"
+    }
   }
 }

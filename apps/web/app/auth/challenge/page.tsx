@@ -1,10 +1,13 @@
 import ChallengeForm from "./ChallengeForm";
+import { connectToDatabase } from "@/lib/Db/db";
+import { StepUpChallenge } from "@/models/StepUpChallenge";
+import { User } from "@/models/User";
 
 type ChallengePageProps = {
-    searchParams?: {
+    searchParams?: Promise<{
         cid?: string;
         next?: string;
-    };
+    }>;
 };
 
 function sanitizeNextPath(nextPath?: string): string {
@@ -19,9 +22,34 @@ function sanitizeNextPath(nextPath?: string): string {
     return nextPath;
 }
 
-export default function ChallengePage({ searchParams }: ChallengePageProps) {
-    const challengeId = searchParams?.cid || "";
-    const nextPath = sanitizeNextPath(searchParams?.next);
+async function getInitialVerificationMethod(challengeId: string): Promise<"password" | "otp"> {
+    if (!challengeId) {
+        return "password";
+    }
+
+    await connectToDatabase();
+
+    const challenge = await StepUpChallenge.findById(challengeId)
+        .select("userId")
+        .lean<{ userId: string } | null>();
+
+    if (!challenge?.userId) {
+        return "password";
+    }
+
+    const user = await User.findById(challenge.userId)
+        .select("authProviders")
+        .lean<{ authProviders?: Array<"password" | "google"> } | null>();
+
+    const providers = Array.isArray(user?.authProviders) ? user.authProviders : [];
+    return providers.includes("password") ? "password" : "otp";
+}
+
+export default async function ChallengePage({ searchParams }: ChallengePageProps) {
+    const resolvedSearchParams = (await searchParams) ?? {};
+    const challengeId = resolvedSearchParams.cid || "";
+    const nextPath = sanitizeNextPath(resolvedSearchParams.next);
+    const initialVerificationMethod = await getInitialVerificationMethod(challengeId);
 
     return (
         <main className="min-h-screen bg-[hsl(var(--background))] px-4 py-10 sm:px-6">
@@ -34,7 +62,11 @@ export default function ChallengePage({ searchParams }: ChallengePageProps) {
                 </p>
 
                 <div className="mt-6">
-                    <ChallengeForm challengeId={challengeId} nextPath={nextPath} />
+                    <ChallengeForm
+                        challengeId={challengeId}
+                        nextPath={nextPath}
+                        initialVerificationMethod={initialVerificationMethod}
+                    />
                 </div>
             </div>
         </main>

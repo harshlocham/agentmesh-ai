@@ -1,12 +1,69 @@
 {
     "name": "@chat/services",
-    "version": "1.1.0",
+    "version": "2.0.2",
+    "type": "module",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "import": "./dist/index.js",
+            "types": "./dist/index.d.ts",
+            "default": "./dist/index.js"
+        },
+        "./outbox.service": {
+            "import": "./dist/services/outbox.service.js",
+            "types": "./dist/services/outbox.service.d.ts",
+            "default": "./dist/services/outbox.service.js"
+        },
+        "./task-intelligence.service": {
+            "import": "./dist/services/task-intelligence.service.js",
+            "types": "./dist/services/task-intelligence.service.d.ts",
+            "default": "./dist/services/task-intelligence.service.js"
+        },
+        "./repositories/task.repo": {
+            "import": "./dist/services/repositories/task.repo.js",
+            "types": "./dist/services/repositories/task.repo.d.ts",
+            "default": "./dist/services/repositories/task.repo.js"
+        },
+        "./contact.service": {
+            "import": "./dist/services/contact.service.js",
+            "types": "./dist/services/contact.service.d.ts",
+            "default": "./dist/services/contact.service.js"
+        },
+        "./tool-normalizers": {
+            "import": "./dist/services/tool-normalizers.js",
+            "types": "./dist/services/tool-normalizers.d.ts",
+            "default": "./dist/services/tool-normalizers.js"
+        },
+        "./validators/*": {
+            "import": "./dist/validators/*.js",
+            "types": "./dist/validators/*.d.ts",
+            "default": "./dist/validators/*.js"
+        },
+        "./*": {
+            "import": "./dist/*.js",
+            "types": "./dist/*.d.ts",
+            "default": "./dist/*.js"
+        },
+        "./repositories/*": {
+            "import": "./dist/repositories/*.js",
+            "types": "./dist/repositories/*.d.ts",
+            "default": "./dist/repositories/*.js"
+        }
+    },
     "scripts": {
-        "build": "tsc -p tsconfig.build.json",
-        "typecheck": "tsc --noEmit"
+        "build": "tsc -p tsconfig.build.json && node ./scripts/postbuild-fix.cjs && node ./scripts/postbuild-resolve-imports.cjs",
+        "typecheck": "tsc --noEmit",
+        "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --config ./jest.config.cjs"
+    },
+    "devDependencies": {
+        "@types/jest": "^30.0.0",
+        "jest": "^30.0.5",
+        "ts-jest": "^29.4.4"
     },
     "dependencies": {
-        "@chat/types": "*",
+        "@chat/db": "workspace:*",
+        "@chat/types": "workspace:*",
         "zod": "^4.0.5"
     }
 }

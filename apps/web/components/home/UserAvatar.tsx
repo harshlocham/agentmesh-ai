@@ -8,7 +8,7 @@ const UserAvatar = ({ profilePicture, username, size = 48 }: { profilePicture?: 
 
     return (
         <div
-            className="relative flex items-center justify-center rounded-full bg-gray-300 overflow-hidden"
+            className="relative flex items-center justify-center overflow-hidden rounded-full bg-primary"
             style={{ width: size, height: size }}
         >
             {src ? (
@@ -19,7 +19,7 @@ const UserAvatar = ({ profilePicture, username, size = 48 }: { profilePicture?: 
                     className="object-cover"
                 />
             ) : (
-                <span className="text-white font-semibold">{initials}</span>
+                <span className="font-semibold text-primary-foreground">{initials}</span>
             )}
         </div>
     );

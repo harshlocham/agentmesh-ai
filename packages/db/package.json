@@ -1,11 +1,42 @@
 {
     "name": "@chat/db",
-    "version": "1.2.0",
+    "version": "2.0.3",
+    "type": "module",
+    "main": "./dist/db.js",
+    "types": "./dist/db.d.ts",
+    "exports": {
+        ".": {
+            "import": "./dist/db.js",
+            "types": "./dist/db.d.ts",
+            "default": "./dist/db.js"
+        },
+        "./db": {
+            "import": "./dist/db.js",
+            "types": "./dist/db.d.ts",
+            "default": "./dist/db.js"
+        },
+        "./mongo": {
+            "import": "./dist/mongo.js",
+            "types": "./dist/mongo.d.ts",
+            "default": "./dist/mongo.js"
+        },
+        "./offlineMessages": {
+            "import": "./dist/offlineMessages.js",
+            "types": "./dist/offlineMessages.d.ts",
+            "default": "./dist/offlineMessages.js"
+        },
+        "./models/*": {
+            "import": "./dist/models/*.js",
+            "types": "./dist/models/*.d.ts",
+            "default": "./dist/models/*.js"
+        }
+    },
     "scripts": {
         "build": "tsc -p tsconfig.build.json",
         "typecheck": "tsc --noEmit"
     },
     "dependencies": {
+        "dexie": "^4.2.1",
         "mongoose": "^8.16.2",
         "mongodb": "^4.17.2"
     }

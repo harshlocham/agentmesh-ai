@@ -1,19 +1,27 @@
 import mongoose, { Document, Model, Schema, Types } from "mongoose";
 
 export type StepUpChallengeStatus = "pending" | "verified" | "expired";
+export type StepUpChallengeVerificationMethod = "password" | "otp";
 
 type StepUpChallengeMetadata = {
     ip?: string;
     userAgent?: string;
 };
 
+type StepUpChallengeOtpState = {
+    hash?: string;
+    sentAt?: Date;
+};
+
 export interface IStepUpChallenge extends Document {
     id: string;
     userId: Types.ObjectId;
     status: StepUpChallengeStatus;
+    verificationMethod: StepUpChallengeVerificationMethod;
     expiresAt: Date;
     createdAt: Date;
     metadata?: StepUpChallengeMetadata;
+    otp?: StepUpChallengeOtpState;
 }
 
 const STEP_UP_TTL_MS = 5 * 60 * 1000;
@@ -33,6 +41,12 @@ const StepUpChallengeSchema = new Schema<IStepUpChallenge>(
             required: true,
             index: true,
         },
+        verificationMethod: {
+            type: String,
+            enum: ["password", "otp"],
+            default: "password",
+            required: true,
+        },
         expiresAt: {
             type: Date,
             required: true,
@@ -41,6 +55,10 @@ const StepUpChallengeSchema = new Schema<IStepUpChallenge>(
         metadata: {
             ip: { type: String },
             userAgent: { type: String },
+        },
+        otp: {
+            hash: { type: String },
+            sentAt: { type: Date },
         },
     },
     {
@@ -72,9 +90,32 @@ export async function createChallenge(
     return StepUpChallenge.create({
         userId: safeUserId,
         status: "pending",
+        verificationMethod: "password",
         expiresAt: new Date(Date.now() + STEP_UP_TTL_MS),
         metadata,
     });
+}
+
+export async function recordChallengeOtp(id: string, otpHash: string): Promise<IStepUpChallenge | null> {
+    const safeId = assertValidObjectId(id, "id");
+
+    return StepUpChallenge.findOneAndUpdate(
+        {
+            _id: safeId,
+            status: "pending",
+            expiresAt: { $gt: new Date() },
+        },
+        {
+            $set: {
+                verificationMethod: "otp",
+                otp: {
+                    hash: otpHash,
+                    sentAt: new Date(),
+                },
+            },
+        },
+        { new: true }
+    );
 }
 
 export async function getChallengeById(id: string): Promise<IStepUpChallenge | null> {
@@ -102,7 +143,13 @@ export async function markChallengeVerified(id: string): Promise<IStepUpChalleng
             status: "pending",
             expiresAt: { $gt: new Date() },
         },
-        { $set: { status: "verified" } },
+        {
+            $set: { status: "verified" },
+            $unset: {
+                "otp.hash": "",
+                "otp.sentAt": "",
+            },
+        },
         { new: true }
     );
 }

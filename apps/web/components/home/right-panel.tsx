@@ -2,6 +2,7 @@
 
 import MessageInput from "../chat/message-input";
 import MessageList from "../chat/message-list";
+import TaskPanel from "../chat/task-panel";
 import ChatPlaceHolder from "@/components/home/chat-placeholder";
 import useChatStore from "@/store/chat-store";
 import { ClientUser } from "@chat/types";
@@ -70,9 +71,14 @@ const RightPanel = () => {
                 onClearSelection={() => setSelectedConversation(null)}
             />
 
-            <MessageList
-                conversationId={conversationId}
-            />
+            <div className="min-h-0 flex flex-1">
+                <div className="min-h-0 flex-1">
+                    <MessageList
+                        conversationId={conversationId}
+                    />
+                </div>
+                <TaskPanel conversationId={conversationId} />
+            </div>
 
             <div className="fixed inset-x-0 bottom-0 z-30 border-t border-[hsl(var(--border))] bg-[hsl(var(--card))] pb-[env(safe-area-inset-bottom)] lg:static lg:z-auto lg:border-t-0 lg:bg-transparent lg:pb-0">
                 <TypingIndicator conversationId={conversationId} />

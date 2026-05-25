@@ -42,6 +42,15 @@ function classifyRefreshFailureReason(errorMessage: string): string {
     return map[errorMessage] || "INTERNAL_REFRESH_ERROR";
 }
 
+function isDatabaseConnectivityError(error: Error): boolean {
+    return (
+        error.name === "MongooseServerSelectionError" ||
+        error.name === "MongoServerSelectionError" ||
+        error.message.includes("buffering timed out") ||
+        error.message.includes("Please define the MONGODB_URI environment variable")
+    );
+}
+
 function getRequestContext(req: NextRequest): RequestContext {
     const forwardedFor = req.headers.get("x-forwarded-for") || "";
     const ipAddress =
@@ -188,6 +197,17 @@ export async function POST(req: NextRequest) {
 
         if (error instanceof Error) {
             logRefreshFailure(context, error.message);
+
+            if (isDatabaseConnectivityError(error)) {
+                return NextResponse.json(
+                    {
+                        success: false,
+                        error: "Database unavailable",
+                        ...withDebug("DATABASE_UNAVAILABLE"),
+                    },
+                    { status: 503 }
+                );
+            }
 
             const debugReason = classifyRefreshFailureReason(error.message);
 

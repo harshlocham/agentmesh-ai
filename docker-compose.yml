@@ -14,19 +14,6 @@ services:
     networks:
       - chatnet
 
-  mongo:
-    image: mongo:7.0
-    restart: unless-stopped
-    volumes:
-      - mongo_data:/data/db
-    healthcheck:
-      test: [ "CMD", "mongo", "--eval", "db.adminCommand('ping')" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - chatnet
-
   nextapp:
     restart: unless-stopped
     build:
@@ -38,11 +25,9 @@ services:
       - .env
     environment:
       REDIS_URL: redis://redis:6379
-      MONGODB_URI: mongodb://mongo:27017/chatapp
       ORIGIN: http://localhost
       SOCKET_SERVER_URL: http://socket:3001
     depends_on:
-      - mongo
       - socket
     healthcheck:
       test: [ "CMD", "node", "-e", "require('net').connect({host:'127.0.0.1',port:3000}).on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))" ]
@@ -60,10 +45,14 @@ services:
       dockerfile: docker/socket.Dockerfile
     expose:
       - "3001"
+    env_file:
+      - .env
     environment:
+      NODE_ENV: production
       INTERNAL_SECRET: ${INTERNAL_SECRET}
       ORIGIN: http://localhost
       REDIS_URL: redis://redis:6379
+      WEB_SERVER_URL: http://nextapp:3000
     healthcheck:
       test: [ "CMD", "node", "-e", "require('net').connect({host:'127.0.0.1',port:3001}).on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))" ]
       interval: 10s
@@ -71,8 +60,7 @@ services:
       retries: 10
       start_period: 20s
     depends_on:
-      redis:
-        condition: service_healthy
+      - redis
     networks:
       - chatnet
 
@@ -88,11 +76,24 @@ services:
       retries: 5
     networks:
       - chatnet
+  task-worker:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: apps/task-worker/Dockerfile
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379
+      SOCKET_SERVER_URL: http://socket:3001
+    depends_on:
+      - redis
+      - socket
+    networks:
+      - chatnet
 
 volumes:
   redis_data:
-  mongo_data:
-
 
 networks:
   chatnet:
