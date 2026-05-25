@@ -7,37 +7,6 @@ import {
     parseCommaSeparatedValues,
 } from "./utils/url.js";
 
-function isOriginAllowed(origin: string | undefined, allowedOrigins: string[]) {
-    if (!origin) {
-        return true;
-    }
-
-    if (allowedOrigins.includes("*") || allowedOrigins.includes(origin)) {
-        return true;
-    }
-
-    if (process.env.NODE_ENV !== "production") {
-        if (origin.startsWith("exp://")) {
-            return true;
-        }
-
-        if (
-            origin.startsWith("http://localhost:")
-            || origin.startsWith("http://127.0.0.1:")
-            || origin.startsWith("http://10.")
-            || origin.startsWith("http://192.168.")
-        ) {
-            return true;
-        }
-
-        if (allowedOrigins.length === 0) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 export function initIO(
     httpServer: HTTPServer,
     redis: RedisAdapterClients
