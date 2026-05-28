@@ -75,8 +75,7 @@ const TaskExecutionEventSchema = new Schema<ITaskExecutionEvent>(
 );
 
 TaskExecutionEventSchema.index({ taskId: 1, sequence: 1 });
-TaskExecutionEventSchema.index({ taskId: 1, runId: 1, sequence: 1 });
-TaskExecutionEventSchema.index({ runId: 1, sequence: 1 }, { unique: true });
+TaskExecutionEventSchema.index({ taskId: 1, runId: 1, sequence: 1 }, { unique: true });
 
 const TaskExecutionEventModel: Model<ITaskExecutionEvent> =
     (mongoose.models.TaskExecutionEvent as Model<ITaskExecutionEvent>)

@@ -2415,6 +2415,32 @@ Reply to confirm receipt or contact support if you have questions.
         return Math.max(1000, Number(process.env.TASK_AGENT_TOOL_TIMEOUT_MS || 60000));
     }
 
+    private stableStringify(value: unknown): string {
+        if (value === undefined || typeof value === "function" || typeof value === "symbol") {
+            return "null";
+        }
+        if (typeof value === "bigint") {
+            return JSON.stringify(value.toString());
+        }
+        if (value === null || typeof value !== "object") {
+            return JSON.stringify(value) ?? "null";
+        }
+
+        if (Array.isArray(value)) {
+            return `[${value.map((entry) => this.stableStringify(entry)).join(",")}]`;
+        }
+
+        const record = value as Record<string, unknown>;
+        return `{${Object.keys(record)
+            .filter((key) => {
+                const entry = record[key];
+                return entry !== undefined && typeof entry !== "function" && typeof entry !== "symbol";
+            })
+            .sort()
+            .map((key) => `${JSON.stringify(key)}:${this.stableStringify(record[key])}`)
+            .join(",")}}`;
+    }
+
     private buildToolIdempotencyKey(args: {
         taskId: string;
         runId: string;
@@ -2422,7 +2448,7 @@ Reply to confirm receipt or contact support if you have questions.
         toolName: string;
         params: unknown;
     }): string {
-        const canonical = JSON.stringify(args.params ?? {});
+        const canonical = this.stableStringify(args.params ?? {});
         return createHash("sha256")
             .update(`${args.taskId}|${args.runId}|${args.stepId ?? "default"}|${args.toolName}|${canonical}`)
             .digest("hex")

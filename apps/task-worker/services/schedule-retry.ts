@@ -25,7 +25,7 @@ type TaskLike = {
 export type ScheduleRetryResult =
     | { outcome: "scheduled"; retryCount: number; nextRetryAt: Date; decision: ReturnType<typeof classifyExecutionError> }
     | { outcome: "exhausted"; retryCount: number; decision: ReturnType<typeof classifyExecutionError> }
-    | { outcome: "not_retryable"; decision: ReturnType<typeof classifyExecutionError> };
+    | { outcome: "not_retryable"; retryCount: number; decision: ReturnType<typeof classifyExecutionError> };
 
 export async function scheduleTaskRetry(
     task: TaskLike,
@@ -36,7 +36,7 @@ export async function scheduleTaskRetry(
         actionType?: TaskExecutionUpdatedPayload["actionType"];
     }
 ): Promise<ScheduleRetryResult> {
-    if (mongoose.connection.readyState === 1) {
+    if (mongoose.connection.readyState !== 1) {
         await connectToDatabase();
     }
 
@@ -48,6 +48,7 @@ export async function scheduleTaskRetry(
     if (!decision.retryable || nextRetryCount > maxRetries) {
         task.lifecycleState = "failed";
         task.status = "failed";
+        task.retryCount = nextRetryCount;
         task.lastRetryReason = decision.reason;
         task.lastRetryAt = new Date();
 
@@ -58,6 +59,7 @@ export async function scheduleTaskRetry(
                     $set: {
                         lifecycleState: "failed",
                         status: "failed",
+                        retryCount: nextRetryCount,
                         lastRetryReason: decision.reason,
                         lastRetryAt: new Date(),
                     },
@@ -85,7 +87,7 @@ export async function scheduleTaskRetry(
 
         return {
             outcome: decision.retryable ? "exhausted" : "not_retryable",
-            retryCount: currentRetry,
+            retryCount: nextRetryCount,
             decision,
         };
     }
@@ -120,7 +122,7 @@ export async function scheduleTaskRetry(
         await options.emit({
             taskId: task._id.toString(),
             conversationId: task.conversationId.toString(),
-            state: "failed",
+            state: "queued",
             actionType: options.actionType ?? "none",
             summary: `Retry scheduled (${decision.category}).`,
             error: decision.reason,

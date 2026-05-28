@@ -9,12 +9,16 @@ import { connectToDatabase } from "@chat/db";
 
 async function allocateSequence(taskId: string, runId: string): Promise<number> {
     const updated = await TaskModel.findOneAndUpdate(
-        { _id: taskId, executionRunId: runId },
+        { _id: taskId },
         { $inc: { executionEventSequence: 1 } },
         { new: true, projection: { executionEventSequence: 1 } }
     ).exec();
 
-    return updated?.executionEventSequence ?? 1;
+    if (!updated?.executionEventSequence) {
+        throw new Error(`Unable to allocate execution event sequence for task ${taskId} and run ${runId}`);
+    }
+
+    return updated.executionEventSequence;
 }
 
 export async function appendExecutionEvent(input: {

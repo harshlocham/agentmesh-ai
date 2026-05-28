@@ -2,4 +2,4 @@ export {
     appendExecutionEvent,
     getExecutionEventsAfter,
     persistExecutionUpdatePayload,
-} from "@chat/services/execution-event.service.js";
+} from "@chat/services/execution-event.service";
