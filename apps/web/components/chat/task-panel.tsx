@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import type { TaskExecutionEventRecord, TaskRecord, TaskStatus } from "@chat/types";
 import { authenticatedFetch } from "@/lib/utils/api";
@@ -17,6 +17,7 @@ interface TaskPanelProps {
 const TASK_STATUSES: TaskStatus[] = ["pending", "executing", "completed", "failed", "partial"];
 const EMPTY_TASK_IDS: string[] = [];
 const EMPTY_STEPS: ExecutionStep[] = [];
+const EMPTY_EXECUTION_EVENTS: TaskExecutionEventRecord[] = [];
 
 type ExecutionStepStatus = "pending" | "running" | "completed";
 
@@ -150,7 +151,11 @@ function TaskInlineCard({ task, onStatusChange }: TaskInlineCardProps) {
     const executionView = useTaskExecution(task._id);
     const setExecutionEvents = useTaskStore((state) => state.setExecutionEvents);
     const appendExecutionEvent = useTaskStore((state) => state.appendExecutionEvent);
-    const executionEvents = useTaskStore((state) => state.executionEventsByTaskId[task._id] ?? []);
+    const executionEvents = useTaskStore((state) => state.executionEventsByTaskId[task._id] ?? EMPTY_EXECUTION_EVENTS);
+    const executionEventsRef = useRef(executionEvents);
+    useEffect(() => {
+        executionEventsRef.current = executionEvents;
+    }, [executionEvents]);
 
     const steps = useMemo(
         () => executionView.steps.map((step) => ({
@@ -166,14 +171,27 @@ function TaskInlineCard({ task, onStatusChange }: TaskInlineCardProps) {
     const hasRunningStep = steps.some((step) => step.status === "running") || task.status === "executing";
 
     const replayExecutionEvents = useCallback(async () => {
-        const lastSequence = executionEvents.reduce((max, event) => Math.max(max, event.sequence), 0);
+        const currentEvents = executionEventsRef.current;
+        const activeRunId = task.executionRunId ?? currentEvents.at(-1)?.runId ?? null;
+        const runEvents = activeRunId
+            ? currentEvents.filter((event) => event.runId === activeRunId)
+            : currentEvents;
+        const lastSequence = runEvents.reduce((max, event) => Math.max(max, event.sequence), 0);
+        const searchParams = new URLSearchParams({ afterSequence: String(lastSequence) });
+        if (activeRunId) {
+            searchParams.set("runId", activeRunId);
+        }
+
         try {
             const response = await authenticatedFetch(
-                `/api/tasks/${task._id}/execution-events?afterSequence=${lastSequence}`
+                `/api/tasks/${task._id}/execution-events?${searchParams.toString()}`
             );
             if (!response.ok) return;
             const payload = (await response.json()) as { events: TaskExecutionEventRecord[] };
-            if (lastSequence === 0) {
+            if (payload.events.length === 0) {
+                return;
+            }
+            if (currentEvents.length === 0) {
                 setExecutionEvents(task._id, payload.events);
                 return;
             }
@@ -183,7 +201,7 @@ function TaskInlineCard({ task, onStatusChange }: TaskInlineCardProps) {
         } catch (error) {
             console.error("Failed to replay task execution events", error);
         }
-    }, [appendExecutionEvent, executionEvents, setExecutionEvents, task._id]);
+    }, [appendExecutionEvent, setExecutionEvents, task._id, task.executionRunId]);
 
     useEffect(() => {
         void replayExecutionEvents();

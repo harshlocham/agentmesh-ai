@@ -4,6 +4,8 @@ import { useMemo } from "react";
 import type { TaskExecutionEventRecord, TaskExecutionUpdatedPayload } from "@chat/types";
 import useTaskStore from "@/store/task-store";
 
+const EMPTY_EXECUTION_EVENTS: TaskExecutionEventRecord[] = [];
+
 export type ExecutionStepStatus = "pending" | "running" | "completed";
 
 export interface DerivedExecutionStep {
@@ -134,7 +136,7 @@ export function deriveExecutionView(
 }
 
 export function useTaskExecution(taskId: string): TaskExecutionView {
-    const events = useTaskStore((state) => state.executionEventsByTaskId[taskId] ?? []);
+    const events = useTaskStore((state) => state.executionEventsByTaskId[taskId] ?? EMPTY_EXECUTION_EVENTS);
     const latest = useTaskStore((state) => state.executionByTaskId[taskId]);
 
     return useMemo(() => deriveExecutionView(events, latest), [events, latest]);
