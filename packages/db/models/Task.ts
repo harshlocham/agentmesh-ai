@@ -51,6 +51,14 @@ export interface ITask {
     executionRunId?: string | null;
     executionStartedAt?: Date | null;
     executionEventSequence?: number;
+    executionState?: Record<string, unknown> | null;
+    stateHistory?: Array<{
+        from: Record<string, unknown>;
+        to: Record<string, unknown>;
+        event: Record<string, unknown>;
+        at: Date;
+        workerId?: string | null;
+    }>;
     blockedReason?: string | null;
     pausedReason?: string | null;
     progress: number;
@@ -153,6 +161,17 @@ const TaskSchema = new Schema<ITask>(
         executionRunId: { type: String, trim: true, maxlength: 80, default: null },
         executionStartedAt: { type: Date, default: null },
         executionEventSequence: { type: Number, min: 0, default: 0 },
+        executionState: { type: Schema.Types.Mixed, default: null },
+        stateHistory: {
+            type: [{
+                from: { type: Schema.Types.Mixed, required: true },
+                to: { type: Schema.Types.Mixed, required: true },
+                event: { type: Schema.Types.Mixed, required: true },
+                at: { type: Date, default: Date.now },
+                workerId: { type: String, trim: true, maxlength: 120, default: null },
+            }],
+            default: [],
+        },
         blockedReason: { type: String, trim: true, maxlength: 2000, default: null },
         pausedReason: { type: String, trim: true, maxlength: 2000, default: null },
         progress: { type: Number, min: 0, max: 100, default: 0 },
@@ -234,6 +253,21 @@ TaskSchema.index({ status: 1, progress: 1, updatedAt: -1 });
 TaskSchema.index({ lifecycleState: 1, updatedAt: -1 });
 TaskSchema.index({ lifecycleState: 1, leaseExpiresAt: 1 });
 TaskSchema.index({ lifecycleState: 1, nextRetryAt: 1 });
+TaskSchema.index({ "executionState.kind": 1 });
+TaskSchema.index(
+    { "executionState.kind": 1, "executionState.leaseExpiresAt": 1 },
+    {
+        partialFilterExpression: {
+            "executionState.kind": {
+                $in: ["planning", "ready_to_execute", "reasoning", "tool_executing", "observing", "verifying", "step_complete"],
+            },
+        },
+    }
+);
+TaskSchema.index(
+    { "executionState.kind": 1, "executionState.nextRetryAt": 1 },
+    { partialFilterExpression: { "executionState.kind": "retry_scheduled" } }
+);
 TaskSchema.index({ leaseOwner: 1, leaseExpiresAt: 1 });
 TaskSchema.index({ executionRunId: 1 }, { sparse: true });
 TaskSchema.index({ sourceMessageIds: 1 });
