@@ -17,18 +17,37 @@ export function buildAmbiguousContactQuestion(reference: string, options: Ambigu
     return `I found multiple contacts for '${reference}'.\n${lines.join("\n")}\nWhich one should I use? Reply with a number or email.`;
 }
 
+const FREE_FORM_EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export function applyClarificationSelection(
     pending: PendingResolution,
     clarificationReply: string
 ): { success: true; selectedEmail: string; selectedName: string } | { success: false; error: string } {
     const ambiguity = pending.ambiguities[0];
-    if (!ambiguity || ambiguity.options.length === 0) {
-        return { success: false, error: "No pending ambiguity options were found." };
+    if (!ambiguity) {
+        return { success: false, error: "No pending ambiguity was found." };
     }
 
     const reply = clarificationReply.trim();
     if (!reply) {
         return { success: false, error: "Clarification reply was empty." };
+    }
+
+    // When no predefined options exist, the clarification was a free-form
+    // "what email should I use?" prompt (e.g. for a placeholder/hallucinated
+    // address). Accept any well-formed email the user supplies.
+    if (ambiguity.options.length === 0) {
+        if (!FREE_FORM_EMAIL_REGEX.test(reply)) {
+            return {
+                success: false,
+                error: "Please reply with a valid email address (for example: jane.doe@gmail.com).",
+            };
+        }
+        return {
+            success: true,
+            selectedEmail: reply,
+            selectedName: ambiguity.reference,
+        };
     }
 
     const selectedIndex = Number.parseInt(reply, 10);

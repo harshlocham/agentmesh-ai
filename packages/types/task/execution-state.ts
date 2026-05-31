@@ -114,6 +114,10 @@ export interface ExecutionStateHistoryEntry {
     event: ExecutionEvent;
     at: string;
     workerId?: string | null;
+    shadowError?: {
+        name: string;
+        message: string;
+    };
 }
 
 export const TERMINAL_EXECUTION_STATES = ["succeeded", "failed", "cancelled"] as const satisfies readonly ExecutionStateKind[];
