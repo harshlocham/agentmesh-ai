@@ -6,6 +6,12 @@ on:
       - "v*"
   pull_request:
     branches: ["main", "develop"]
+    paths-ignore:
+      - "docs/**"
+      - "examples/**"
+      - "**/*.md"
+      - "LICENSE"
+      - ".gitignore"
   schedule:
     - cron: "17 2 * * *"
   workflow_dispatch:
