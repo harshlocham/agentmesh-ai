@@ -32,6 +32,81 @@ function isValidEmail(value: string): boolean {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
+// RFC 2606 reserved + commonly-used placeholder domains the LLM hallucinates
+// when it doesn't actually know a recipient. Hitting any of these means we
+// must stop and ask the user for the real address instead of trusting the
+// fabricated one.
+const PLACEHOLDER_EMAIL_DOMAINS = new Set<string>([
+    "example.com",
+    "example.org",
+    "example.net",
+    "example.edu",
+    "test.com",
+    "test.org",
+    "test.net",
+    "foo.com",
+    "bar.com",
+    "domain.com",
+    "email.com",
+    "mail.com",
+    "company.com",
+    "mycompany.com",
+    "yourcompany.com",
+    "yourdomain.com",
+    "yourname.com",
+    "placeholder.com",
+    "anywhere.com",
+]);
+
+const PLACEHOLDER_RESERVED_TLDS = /\.(test|example|invalid|localhost|local)$/i;
+
+function getEmailDomain(value: string): string | null {
+    const at = value.lastIndexOf("@");
+    if (at < 0 || at >= value.length - 1) {
+        return null;
+    }
+    return value.slice(at + 1).trim().toLowerCase();
+}
+
+function isPlaceholderEmail(value: string): boolean {
+    if (!isValidEmail(value)) {
+        return false;
+    }
+    const domain = getEmailDomain(value);
+    if (!domain) {
+        return false;
+    }
+    if (PLACEHOLDER_EMAIL_DOMAINS.has(domain)) {
+        return true;
+    }
+    if (PLACEHOLDER_RESERVED_TLDS.test(domain)) {
+        return true;
+    }
+    return false;
+}
+
+function buildPlaceholderClarificationResult(
+    reference: string,
+    params: Record<string, unknown>
+): ResolveToolParametersResult {
+    const localPart = reference.slice(0, reference.indexOf("@")).trim() || reference;
+    const displayName = localPart || reference;
+    return {
+        status: "clarification_required",
+        clarificationQuestion: `I don't have a real email address on file for '${displayName}'. The address I have ('${reference}') looks like a placeholder. What is the actual email address I should send this to?`,
+        pendingResolution: {
+            toolName: "send_email",
+            parametersSnapshot: { ...params },
+            ambiguities: [
+                {
+                    reference,
+                    options: [],
+                },
+            ],
+        },
+    };
+}
+
 function toStringArray(value: unknown): string[] {
     if (typeof value === "string") {
         return value
@@ -118,6 +193,14 @@ async function resolveSendEmailParams(
     const resolvedEmails: string[] = [];
 
     for (const reference of references) {
+        // Reject obvious LLM-hallucinated emails (RFC 2606 reserved + common
+        // placeholder domains) BEFORE any contact lookup. The contact resolver
+        // currently trusts any syntactically valid email, so if we don't catch
+        // these here the agent will silently send to a fake address.
+        if (isPlaceholderEmail(reference)) {
+            return buildPlaceholderClarificationResult(reference, params);
+        }
+
         if (!userId) {
             if (isValidEmail(reference)) {
                 resolvedEmails.push(reference.trim().toLowerCase());

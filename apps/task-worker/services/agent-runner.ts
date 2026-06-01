@@ -1,6 +1,9 @@
-import type { TaskCheckpoint, TaskExecutionActionType, TaskExecutionHistory, TaskExecutionUpdatedPayload, TaskResult, TaskUpdatedPayload, TaskValidationLog } from "@chat/types";
+import { createHash } from "node:crypto";
+import mongoose from "mongoose";
+import type { ExecutionEvent, ExecutionState, TaskCheckpoint, TaskExecutionActionType, TaskExecutionHistory, TaskExecutionUpdatedPayload, TaskResult, TaskUpdatedPayload, TaskValidationLog } from "@chat/types";
 import { RetryManager } from "./retry-manager.js";
-import { getLatestExecutionTaskAction as getLatestExecutionTaskActionFromRepo } from "@chat/services/repositories/task.repo";
+import { createTaskAction, getLatestExecutionTaskAction as getLatestExecutionTaskActionFromRepo } from "@chat/services/repositories/task.repo";
+import TaskActionModel from "@chat/db/models/TaskAction";
 import * as taskModule from "@chat/db/models/Task";
 import TaskPlanModel from "@chat/db/models/TaskPlan";
 import ToolRegistry from "./tools/tool-registry.js";
@@ -12,6 +15,8 @@ import { createOrRefreshTaskPlan, getTaskPlan } from "./planner.js";
 import { retrieveMemory } from "./memory-service.js";
 import { generateAndStoreReflection } from "./reflection-service.js";
 import { acquireTaskLease, heartbeatTaskLease, releaseTaskLease } from "./task-lease.js";
+import { scheduleTaskRetry } from "./schedule-retry.js";
+import { logExecution } from "./execution-logger.js";
 import { assertTransition } from "./task-state-machine.js";
 import { rankTools, type ToolRankingInput } from "./tool-ranking.js";
 import { collectPreviousStepOutputs, llmDecisionSchema, normalizeParams, resolveStepTemplates, type PreviousStepOutputs, validateToolParameters } from "./step-execution-utils.js";
@@ -19,6 +24,15 @@ import { createDefaultLLMProvider } from "./llm/index.js";
 import { parseJsonText } from "./llm/response-parser.js";
 import { resolveToolParameters, type ResolveToolParametersResult } from "./resolve-tool-params.js";
 import type { PendingResolution } from "./entity-resolution.service.js";
+import {
+    appendShadowHistory,
+    createQueuedShadowState,
+    isExecutionState,
+    reduceShadowExecutionEvent,
+    resolveCurrentShadowState,
+    type ShadowExecutionStateHistoryEntry,
+    shouldResetShadowRunState,
+} from "./execution-state-shadow.js";
 
 import { createInternalRequestHeaders } from "@chat/types/utils/internal-bridge-auth";
 
@@ -62,6 +76,8 @@ type TaskDocumentLike = {
     checkpoints?: TaskCheckpoint[];
     executionHistory?: TaskExecutionHistory;
     result?: TaskResult;
+    executionState?: ExecutionState | Record<string, unknown> | null;
+    stateHistory?: ShadowExecutionStateHistoryEntry[];
     version: number;
     updatedBy: null | string;
     save: () => Promise<void>;
@@ -136,6 +152,13 @@ type RunTaskOutcome = {
     maxRetries: number;
     result: ActionExecutionResult | null;
     verification: VerificationOutcome | null;
+};
+
+export type RunTaskContext = {
+    runId?: string;
+    workerId?: string;
+    leaseHeld?: boolean;
+    abortSignal?: AbortSignal;
 };
 
 type ExecutionUpdateEmitter = (payload: TaskExecutionUpdatedPayload) => Promise<void> | void;
@@ -550,7 +573,15 @@ export class AgentRunner {
         const model = process.env.TASK_AGENT_MODEL || "gpt-4o-mini";
         const confidenceThreshold = this.getConfidenceThreshold();
 
-        const systemPrompt = "Return one JSON object only with keys: tool, confidence, parameters, reasoning, noAction, needsClarification, clarificationQuestion. No extra text. Execute at most one tool per iteration. For requests with multiple outcomes (for example email + github issue + meeting), keep selecting the next required tool in later iterations. Do not repeat a tool that already succeeded unless the user explicitly asks for repetition. Set noAction=true only when all requested outcomes are complete. For create_github_issue, always provide a detailed title and body.";
+        const systemPrompt = [
+            "Return one JSON object only with keys: tool, confidence, parameters, reasoning, noAction, needsClarification, clarificationQuestion.",
+            "No extra text. Execute at most one tool per iteration.",
+            "For requests with multiple outcomes (for example email + github issue + meeting), keep selecting the next required tool in later iterations.",
+            "Do not repeat a tool that already succeeded unless the user explicitly asks for repetition.",
+            "Set noAction=true only when all requested outcomes are complete.",
+            "For create_github_issue, always provide a detailed title and body.",
+            "For send_email, set parameters.to to the literal recipient as the user wrote it: a name (e.g. \"harsh\") OR an exact email address the user provided. NEVER invent, fabricate, or guess an email address. NEVER use placeholder, example, or reserved domains (example.com, example.org, example.net, *.test, *.invalid, *.localhost, test.com, etc.). If the user gave only a name, put just the name in `to` — a downstream contact resolver will look it up. If you cannot determine the recipient, set needsClarification=true with a specific question such as \"What email address should I send to for <name>?\" and leave `to` empty.",
+        ].join(" ");
 
         const requestedOutcomes = Array.from(this.extractRequestedTools(task));
         const completedOutcomes = Array.from(this.collectCompletedTools(iterationContext));
@@ -774,6 +805,95 @@ Reply to confirm receipt or contact support if you have questions.
         return 0;
     }
 
+    private isShadowExecutionStateEnabled(): boolean {
+        return process.env.TASK_EXECUTION_FSM_SHADOW_MODE !== "0";
+    }
+
+    private getShadowLeaseExpiresAt(task: TaskDocumentLike): string {
+        if (task.leaseExpiresAt instanceof Date) {
+            return task.leaseExpiresAt.toISOString();
+        }
+
+        const leaseMs = Math.max(1000, Number(process.env.TASK_LEASE_MS || 30000));
+        return new Date(Date.now() + leaseMs).toISOString();
+    }
+
+    private async persistShadowExecutionState(task: TaskDocumentLike, event: ExecutionEvent) {
+        if (!this.isShadowExecutionStateEnabled()) {
+            return;
+        }
+
+        const current = resolveCurrentShadowState(task.executionState);
+        const result = reduceShadowExecutionEvent({
+            current,
+            event,
+            workerId: this.workerId,
+        });
+
+        task.executionState = result.to;
+        task.stateHistory = appendShadowHistory(task.stateHistory, result.historyEntry);
+
+        try {
+            await task.save();
+        } catch (error) {
+            logExecution("warn", {
+                event: "execution.fsm_shadow.persist_failed",
+                runId: this.currentRunId ?? undefined,
+                workerId: this.workerId,
+                taskId: task._id.toString(),
+                transitionEvent: event.type,
+                error: error instanceof Error ? error.message : String(error),
+            });
+            return;
+        }
+
+        logExecution(result.ok ? "info" : "warn", {
+            event: result.ok ? "execution.fsm_shadow.transition" : "execution.fsm_shadow.invalid_transition",
+            runId: this.currentRunId ?? undefined,
+            workerId: this.workerId,
+            taskId: task._id.toString(),
+            transitionEvent: event.type,
+            from: result.from.kind,
+            to: result.to.kind,
+            ...(result.ok ? {} : { error: result.error.message }),
+        });
+    }
+
+    private async startShadowExecutionRun(task: TaskDocumentLike, runId: string) {
+        if (!this.isShadowExecutionStateEnabled()) {
+            return;
+        }
+
+        if (shouldResetShadowRunState(task.executionState)) {
+            task.executionState = createQueuedShadowState();
+            task.stateHistory = task.stateHistory ?? [];
+        }
+
+        if (isExecutionState(task.executionState) && task.executionState.kind === "paused") {
+            await this.persistShadowExecutionState(task, {
+                type: "CLARIFICATION_RESOLVED",
+                runId,
+                workerId: this.workerId,
+                leaseExpiresAt: this.getShadowLeaseExpiresAt(task),
+                iteration: Math.max(1, (task.iterationCount ?? 0) + 1),
+            });
+            return;
+        }
+
+        if (isExecutionState(task.executionState) && task.executionState.kind === "queued") {
+            await this.persistShadowExecutionState(task, { type: "POLICY_EVALUATE" });
+        }
+
+        if (isExecutionState(task.executionState) && task.executionState.kind === "policy_evaluating") {
+            await this.persistShadowExecutionState(task, {
+                type: "LEASE_ACQUIRED",
+                runId,
+                workerId: this.workerId,
+                leaseExpiresAt: this.getShadowLeaseExpiresAt(task),
+            });
+        }
+    }
+
     private async appendCheckpoint(
         task: TaskDocumentLike,
         input: {
@@ -840,6 +960,8 @@ Reply to confirm receipt or contact support if you have questions.
         attempt?: number | null;
     }) {
         if (!this.onExecutionUpdate) return;
+
+        const runId = input.runId ?? this.currentRunId ?? null;
         await this.onExecutionUpdate({
             taskId: task._id.toString(),
             conversationId: task.conversationId.toString(),
@@ -852,17 +974,17 @@ Reply to confirm receipt or contact support if you have questions.
             step: input.step ?? null,
             progress: input.progress,
             details: input.details ?? null,
-            ...(input.runId ? { runId: input.runId } : {}),
+            ...(runId ? { runId } : {}),
             ...(typeof input.attempt === "number" ? { attempt: input.attempt } : {}),
         });
     }
 
-    async runTask(taskId: string): Promise<RunTaskOutcome> {
-        const runId = `run-${taskId}-${Date.now()}`;
+    async runTask(taskId: string, ctx?: RunTaskContext): Promise<RunTaskOutcome> {
+        const runId = ctx?.runId ?? `run-${taskId}-${Date.now()}`;
         this.currentRunId = runId;
         try {
             if (this.persistentLoopEnabled) {
-                return await this.runTaskPersistent(taskId, runId);
+                return await this.runTaskPersistent(taskId, runId, ctx);
             }
 
             const task = await this.taskModel.findById(taskId);
@@ -874,6 +996,8 @@ Reply to confirm receipt or contact support if you have questions.
             if (!action) {
                 throw new Error(`No execution action found for task: ${taskId}`);
             }
+
+            await this.startShadowExecutionRun(task, runId);
 
             const context: LoopContext = {
                 task,
@@ -904,7 +1028,10 @@ Reply to confirm receipt or contact support if you have questions.
             let goalAchieved = false;
             const iterationContext: IterationContextEntry[] = [];
 
-            console.log("agent-runner lifecycle:start", {
+            logExecution("info", {
+                event: "execution.started",
+                workerId: this.workerId,
+                runId: this.currentRunId ?? undefined,
                 taskId,
                 toolName: context.action.toolName,
                 retryCount: context.retryCount,
@@ -928,12 +1055,18 @@ Reply to confirm receipt or contact support if you have questions.
                 },
             });
 
+            await this.persistShadowExecutionState(task, { type: "PLAN_READY" });
+
             while (!goalAchieved && iteration < maxIterations && task.status !== "completed") {
                 iteration += 1;
-                console.log("agent-runner lifecycle:loop", {
+                await this.persistShadowExecutionState(task, { type: "ITERATION_START", iteration });
+                logExecution("info", {
+                    event: "execution.iteration",
+                    workerId: this.workerId,
+                    runId: this.currentRunId ?? undefined,
                     taskId,
-                    iteration,
-                    maxIterations,
+                    phase: "reason",
+                    attempt: iteration,
                 });
 
                 try {
@@ -947,42 +1080,22 @@ Reply to confirm receipt or contact support if you have questions.
                             context.retryCount += 1;
                             console.error("agent-runner llm:fatal", { taskId, reason: message, retryCount: context.retryCount });
 
-                            if (context.retryCount <= context.maxRetries) {
-                                // schedule a retry and return control so orchestrator can requeue
-                                await this.updateTask(task, {
-                                    lifecycleState: "retry_scheduled",
-                                    status: "partial",
-                                    retryCount: context.retryCount,
-                                    maxRetries: context.maxRetries,
-                                });
-
-                                await this.appendCheckpoint(task, {
-                                    step: "failed",
-                                    status: "completed",
-                                    progress: 100,
-                                });
-
-                                return {
-                                    completed: false,
-                                    retryCount: context.retryCount,
-                                    maxRetries: context.maxRetries,
-                                    result: context.observed,
-                                    verification: context.verification,
-                                };
-                            }
-
-                            // exceeded retries -> move to dead-letter (failed)
-                            await this.updateTask(task, {
-                                status: "failed",
-                                retryCount: context.retryCount,
-                                maxRetries: context.maxRetries,
-                                progress: 100,
-                                result: {
-                                    success: false,
-                                    confidence: 0,
-                                    evidence: { reason: message },
-                                    error: message,
+                            const retryResult = await scheduleTaskRetry(task, err, {
+                                runId: this.currentRunId,
+                                actionType: this.mapToolNameToActionType(context.action.toolName),
+                                emit: async (payload) => {
+                                    await this.onExecutionUpdate?.(payload);
                                 },
+                            });
+                            await this.persistShadowExecutionState(task, {
+                                type: "ERROR_OCCURRED",
+                                reason: message,
+                                retryable: retryResult.outcome === "scheduled",
+                                category: retryResult.decision.category,
+                                retryCount: retryResult.retryCount,
+                                maxRetries: context.maxRetries,
+                                ...(retryResult.outcome === "scheduled" ? { nextRetryAt: retryResult.nextRetryAt.toISOString() } : {}),
+                                finishedAt: new Date().toISOString(),
                             });
 
                             await this.appendCheckpoint(task, {
@@ -993,7 +1106,7 @@ Reply to confirm receipt or contact support if you have questions.
 
                             return {
                                 completed: false,
-                                retryCount: context.retryCount,
+                                retryCount: typeof task.retryCount === "number" ? task.retryCount : context.retryCount,
                                 maxRetries: context.maxRetries,
                                 result: context.observed,
                                 verification: context.verification,
@@ -1015,6 +1128,11 @@ Reply to confirm receipt or contact support if you have questions.
                         },
                     });
                     if (decision.needsClarification) {
+                        await this.persistShadowExecutionState(task, {
+                            type: "CLARIFICATION_REQUIRED",
+                            reason: decision.reasoning ?? "Clarification required.",
+                            question: decision.clarificationQuestion ?? "Please provide more details.",
+                        });
                         await this.updateTask(task, {
                             status: "waiting_for_input",
                             lifecycleState: "paused",
@@ -1062,6 +1180,16 @@ Reply to confirm receipt or contact support if you have questions.
 
                     if (decision.noAction || decision.goalAchieved) {
                         goalAchieved = true;
+                        await this.persistShadowExecutionState(task, {
+                            type: "GOAL_ACHIEVED",
+                            finishedAt: new Date().toISOString(),
+                            runId: this.getCurrentRunId(),
+                            result: {
+                                confidence: context.verification?.confidence ?? 1,
+                                summary: decision.reasoning ?? "Goal achieved.",
+                                evidence: context.observed?.evidence ?? null,
+                            },
+                        });
                         await this.updateTask(task, {
                             status: "completed",
                             progress: 100,
@@ -1115,6 +1243,16 @@ Reply to confirm receipt or contact support if you have questions.
                     const missingTools = Array.from(requestedTools).filter((toolName) => !completedTools.has(toolName));
 
                     if (requestedTools.size > 0 && missingTools.length === 0) {
+                        await this.persistShadowExecutionState(task, {
+                            type: "GOAL_ACHIEVED",
+                            finishedAt: new Date().toISOString(),
+                            runId: this.getCurrentRunId(),
+                            result: {
+                                confidence: context.verification?.confidence ?? 1,
+                                summary: "All requested outcomes are complete.",
+                                evidence: context.observed?.evidence ?? null,
+                            },
+                        });
                         await this.updateTask(task, {
                             status: "completed",
                             progress: 100,
@@ -1196,6 +1334,21 @@ Reply to confirm receipt or contact support if you have questions.
                         },
                     });
 
+                    const toolIdempotencyKey = this.buildToolIdempotencyKey({
+                        taskId,
+                        runId: this.getCurrentRunId(),
+                        stepId: context.action.toolName,
+                        toolName: context.attemptPayload.toolName,
+                        params: context.attemptPayload.parameters,
+                    });
+                    await this.persistShadowExecutionState(task, {
+                        type: "TOOL_STARTED",
+                        stepId: context.action.toolName,
+                        toolName: context.attemptPayload.toolName,
+                        attempt: context.retryCount + 1,
+                        idempotencyKey: toolIdempotencyKey,
+                    });
+
                     await this.appendCheckpoint(task, {
                         step: "execute",
                         status: "started",
@@ -1218,7 +1371,7 @@ Reply to confirm receipt or contact support if you have questions.
                         ...context.attemptPayload,
                         stepId: context.action.toolName,
                         attempt: context.retryCount + 1,
-                        idempotencyKey: this.buildIdempotencyKey(taskId, context.action.toolName, context.retryCount + 1),
+                        idempotencyKey: toolIdempotencyKey,
                     }, {
                         userId: this.getTaskUserId(task),
                         clarificationReply: typeof task.pausedReason === "string" ? task.pausedReason : null,
@@ -1227,6 +1380,12 @@ Reply to confirm receipt or contact support if you have questions.
 
                     const clarification = this.getClarificationPayload(executed);
                     if (clarification) {
+                        await this.persistShadowExecutionState(task, {
+                            type: "CLARIFICATION_REQUIRED",
+                            reason: "Tool execution requires clarification.",
+                            question: clarification.question,
+                            pendingResolution: clarification.pendingResolution ?? undefined,
+                        });
                         await this.pauseForClarification(task, clarification.question, context.action.toolName, clarification.pendingResolution);
                         return {
                             completed: false,
@@ -1258,6 +1417,7 @@ Reply to confirm receipt or contact support if you have questions.
                         },
                     });
 
+                    await this.persistShadowExecutionState(task, { type: "TOOL_OBSERVED" });
                     context.observed = await this.observe(context, executed);
 
                     const currentContext = iterationContext[iterationContext.length - 1];
@@ -1290,6 +1450,7 @@ Reply to confirm receipt or contact support if you have questions.
                         },
                     });
 
+                    await this.persistShadowExecutionState(task, { type: "TOOL_VERIFIED" });
                     context.verification = await this.verify(context.observed, context);
                     await this.emitExecutionUpdate(task, {
                         state: context.verification.success ? "running" : "failed",
@@ -1309,6 +1470,7 @@ Reply to confirm receipt or contact support if you have questions.
                     });
 
                     if (context.verification.success) {
+                        await this.persistShadowExecutionState(task, { type: "STEP_COMPLETED" });
                         await this.appendCheckpoint(task, {
                             step: "verify",
                             status: "completed",
@@ -1411,6 +1573,15 @@ Reply to confirm receipt or contact support if you have questions.
                     const reason = error instanceof Error ? error.message : "unknown execution error";
 
                     if (/abort|timed out|lease lost/i.test(reason)) {
+                        await this.persistShadowExecutionState(task, {
+                            type: "ERROR_OCCURRED",
+                            reason,
+                            retryable: false,
+                            category: "aborted",
+                            retryCount: context.retryCount,
+                            maxRetries: context.maxRetries,
+                            finishedAt: new Date().toISOString(),
+                        });
                         await this.updateTask(task, {
                             status: "failed",
                             retryCount: context.retryCount,
@@ -1478,6 +1649,18 @@ Reply to confirm receipt or contact support if you have questions.
                     };
 
                     context.retryCount += 1;
+                    await this.persistShadowExecutionState(task, {
+                        type: "ERROR_OCCURRED",
+                        reason,
+                        retryable: context.retryCount <= context.maxRetries,
+                        category: "iteration_error",
+                        retryCount: context.retryCount,
+                        maxRetries: context.maxRetries,
+                        ...(context.retryCount <= context.maxRetries
+                            ? { nextRetryAt: new Date(Date.now() + 1000).toISOString() }
+                            : {}),
+                        finishedAt: new Date().toISOString(),
+                    });
 
                     console.warn("agent-runner lifecycle:iteration-error", {
                         taskId,
@@ -1506,6 +1689,15 @@ Reply to confirm receipt or contact support if you have questions.
                 }
             }
 
+            await this.persistShadowExecutionState(task, {
+                type: "ERROR_OCCURRED",
+                reason: "Max iterations reached before goal achievement.",
+                retryable: false,
+                category: "max_iterations",
+                retryCount: context.retryCount,
+                maxRetries: context.maxRetries,
+                finishedAt: new Date().toISOString(),
+            });
             await this.updateTask(task, {
                 status: "failed",
                 retryCount: context.retryCount,
@@ -1762,7 +1954,11 @@ Reply to confirm receipt or contact support if you have questions.
             iteration: input.iteration,
         };
 
-        const systemPrompt = "Return one JSON object only with keys: tool, confidence, parameters, reasoning, needsClarification, clarificationQuestion. No extra text.";
+        const systemPrompt = [
+            "Return one JSON object only with keys: tool, confidence, parameters, reasoning, needsClarification, clarificationQuestion.",
+            "No extra text.",
+            "For send_email, set parameters.to to the literal recipient as the user wrote it: a name (e.g. \"harsh\") OR an exact email address the user provided. NEVER invent, fabricate, or guess an email address. NEVER use placeholder, example, or reserved domains (example.com, example.org, example.net, *.test, *.invalid, *.localhost, test.com, etc.). If only a name was provided, pass that name as the recipient — the resolver will look it up. If the recipient is unknown, set needsClarification=true with a specific question.",
+        ].join(" ");
 
         console.log("agent-runner llm:step-request", { runId: this.currentRunId, taskId: input.task._id.toString(), stepId: input.step.stepId, model, payloadSummary: JSON.stringify(userPayload).slice(0, 2000) });
 
@@ -1816,21 +2012,24 @@ Reply to confirm receipt or contact support if you have questions.
         }
     }
 
-    private async runTaskPersistent(taskId: string, runId: string): Promise<RunTaskOutcome> {
+    private async runTaskPersistent(taskId: string, runId: string, ctx?: RunTaskContext): Promise<RunTaskOutcome> {
         const task = await this.taskModel.findById(taskId);
         if (!task) {
             throw new Error(`Task not found: ${taskId}`);
         }
 
-        const lease = await this.acquireTaskLeaseFn(taskId, this.workerId);
-        if (!lease) {
-            return {
-                completed: false,
-                retryCount: typeof task.retryCount === "number" ? task.retryCount : 0,
-                maxRetries: typeof task.maxRetries === "number" ? task.maxRetries : 2,
-                result: null,
-                verification: null,
-            };
+        const leaseHeld = Boolean(ctx?.leaseHeld);
+        if (!leaseHeld) {
+            const lease = await this.acquireTaskLeaseFn(taskId, this.workerId);
+            if (!lease) {
+                return {
+                    completed: false,
+                    retryCount: typeof task.retryCount === "number" ? task.retryCount : 0,
+                    maxRetries: typeof task.maxRetries === "number" ? task.maxRetries : 2,
+                    result: null,
+                    verification: null,
+                };
+            }
         }
 
         const maxIterations = Math.max(1, Number(process.env.TASK_AGENT_MAX_ITERATIONS || 8));
@@ -1841,12 +2040,23 @@ Reply to confirm receipt or contact support if you have questions.
         let lastResult: ActionExecutionResult | null = null;
         let lastVerification: VerificationOutcome | null = null;
         const runAbortController = new AbortController();
+        if (ctx?.abortSignal) {
+            if (ctx.abortSignal.aborted) {
+                runAbortController.abort();
+            } else {
+                ctx.abortSignal.addEventListener("abort", () => runAbortController.abort(), { once: true });
+            }
+        }
         this.currentRunId = runId;
-        const watchdog = this.startLeaseWatchdog(taskId, runAbortController, runId, watchdogIntervalMs);
+        const watchdog = leaseHeld
+            ? { stop: () => undefined }
+            : this.startLeaseWatchdog(taskId, runAbortController, runId, watchdogIntervalMs);
 
         try {
+            await this.startShadowExecutionRun(task, runId);
             await this.ensurePlan(task);
             await this.transitionLifecycle(task, "ready");
+            await this.persistShadowExecutionState(task, { type: "PLAN_READY" });
 
             while (iteration < maxIterations) {
                 iteration += 1;
@@ -1861,6 +2071,7 @@ Reply to confirm receipt or contact support if you have questions.
                     if (!latestTask) {
                         throw new Error(`Task disappeared during execution: ${taskId}`);
                     }
+                    await this.persistShadowExecutionState(latestTask, { type: "ITERATION_START", iteration });
 
                     const plan = await this.ensurePlan(latestTask);
                     const step = await this.pickNextRunnableStep(plan);
@@ -1870,15 +2081,38 @@ Reply to confirm receipt or contact support if you have questions.
                         const hasPending = plan.steps.some((entry) => ["ready", "running", "retry_scheduled", "waiting_for_dependency"].includes(entry.state));
 
                         if (hasFailedStep) {
+                            await this.persistShadowExecutionState(latestTask, {
+                                type: "ERROR_OCCURRED",
+                                reason: "A plan step failed or became blocked.",
+                                retryable: false,
+                                category: "plan_step_failed",
+                                retryCount: typeof latestTask.retryCount === "number" ? latestTask.retryCount : 0,
+                                maxRetries: typeof latestTask.maxRetries === "number" ? latestTask.maxRetries : 2,
+                                finishedAt: new Date().toISOString(),
+                            });
                             await this.transitionLifecycle(latestTask, "failed");
                             break;
                         }
 
                         if (!hasPending) {
+                            await this.persistShadowExecutionState(latestTask, {
+                                type: "GOAL_ACHIEVED",
+                                finishedAt: new Date().toISOString(),
+                                runId: this.getCurrentRunId(),
+                                result: {
+                                    confidence: lastVerification?.confidence ?? 1,
+                                    summary: lastResult?.summary ?? "Task completed.",
+                                    evidence: lastResult?.evidence ?? null,
+                                },
+                            });
                             await this.transitionLifecycle(latestTask, "completed");
                             break;
                         }
 
+                        await this.persistShadowExecutionState(latestTask, {
+                            type: "BLOCKED",
+                            reason: "No runnable steps due to dependency constraints.",
+                        });
                         await this.transitionLifecycle(latestTask, "blocked");
                         latestTask.blockedReason = "No runnable steps due to dependency constraints.";
                         await this.updateTask(latestTask, {
@@ -1939,38 +2173,44 @@ Reply to confirm receipt or contact support if you have questions.
                         const message = err instanceof Error ? err.message : String(err);
                         if (typeof message === "string" && message.startsWith("LLM_ERROR:")) {
                             // Do not execute any tool. Respect retry semantics for persistent loop.
-                            const currentRetry = typeof latestTask.retryCount === "number" ? latestTask.retryCount + 1 : 1;
-                            await this.updateTask(latestTask, {
-                                lifecycleState: currentRetry <= (latestTask.maxRetries ?? 2) ? "retry_scheduled" : "failed",
-                                status: currentRetry <= (latestTask.maxRetries ?? 2) ? "partial" : "failed",
-                                retryCount: currentRetry,
-                                maxRetries: latestTask.maxRetries ?? 2,
-                            });
-
                             await this.updatePlanStepState(taskId, step.stepId, {
-                                state: currentRetry <= (step.maxAttempts ?? 3) ? "retry_scheduled" : "failed",
+                                state: "retry_scheduled",
                                 lastError: message,
                             });
 
-                            console.error("agent-runner llm:step-failure", { taskId, stepId: step.stepId, message });
+                            const retryResult = await scheduleTaskRetry(latestTask, err, {
+                                runId: this.currentRunId,
+                                actionType: this.mapToolNameToActionType(step.selectedToolName ?? null),
+                                emit: async (payload) => {
+                                    await this.onExecutionUpdate?.(payload);
+                                },
+                            });
+                            await this.persistShadowExecutionState(latestTask, {
+                                type: "ERROR_OCCURRED",
+                                reason: message,
+                                retryable: retryResult.outcome === "scheduled",
+                                category: retryResult.decision.category,
+                                retryCount: retryResult.retryCount,
+                                maxRetries: typeof latestTask.maxRetries === "number" ? latestTask.maxRetries : 2,
+                                ...(retryResult.outcome === "scheduled" ? { nextRetryAt: retryResult.nextRetryAt.toISOString() } : {}),
+                                finishedAt: new Date().toISOString(),
+                            });
 
-                            if (currentRetry <= (latestTask.maxRetries ?? 2)) {
-                                // break out to allow scheduler to retry later
-                                await this.appendCheckpoint(latestTask, { step: "failed", status: "completed" });
-                                await this.releaseTaskLeaseFn(taskId, this.workerId);
-                                return {
-                                    completed: false,
-                                    retryCount: currentRetry,
-                                    maxRetries: latestTask.maxRetries ?? 2,
-                                    result: null,
-                                    verification: null,
-                                };
-                            }
+                            console.error("agent-runner llm:step-failure", {
+                                taskId,
+                                stepId: step.stepId,
+                                message,
+                                retryOutcome: retryResult.outcome,
+                            });
 
-                            // exceeded retries -> fail the task
                             await this.appendCheckpoint(latestTask, { step: "failed", status: "completed" });
-                            await this.transitionLifecycle(latestTask, "failed");
-                            break;
+                            return {
+                                completed: false,
+                                retryCount: typeof latestTask.retryCount === "number" ? latestTask.retryCount : 0,
+                                maxRetries: latestTask.maxRetries ?? 2,
+                                result: null,
+                                verification: null,
+                            };
                         }
 
                         throw err;
@@ -1978,6 +2218,11 @@ Reply to confirm receipt or contact support if you have questions.
 
                     if (decision.needsClarification) {
                         const clarificationQuestion = decision.clarificationQuestion ?? "Please provide more details.";
+                        await this.persistShadowExecutionState(latestTask, {
+                            type: "CLARIFICATION_REQUIRED",
+                            reason: decision.reasoning ?? "Clarification required.",
+                            question: clarificationQuestion,
+                        });
                         await this.updatePlanStepState(taskId, step.stepId, {
                             state: "blocked",
                             lastError: clarificationQuestion,
@@ -2026,10 +2271,20 @@ Reply to confirm receipt or contact support if you have questions.
                         });
 
                         if ((step.attempts ?? 0) + 1 < (step.maxAttempts ?? 3)) {
-                            await this.transitionLifecycle(latestTask, "retry_scheduled");
-                            await waitForSignal(this.getBackoffDelay((step.attempts ?? 0) + 1), this.currentExecutionSignal ?? undefined);
-                            await this.transitionLifecycle(latestTask, "ready");
-                            continue;
+                            await scheduleTaskRetry(latestTask, new Error(validationError), {
+                                runId: this.currentRunId,
+                                actionType: this.mapToolNameToActionType(decision.toolName),
+                                emit: async (payload) => {
+                                    await this.onExecutionUpdate?.(payload);
+                                },
+                            });
+                            return {
+                                completed: false,
+                                retryCount: typeof latestTask.retryCount === "number" ? latestTask.retryCount : 0,
+                                maxRetries: typeof latestTask.maxRetries === "number" ? latestTask.maxRetries : 2,
+                                result: null,
+                                verification: null,
+                            };
                         }
 
                         await this.transitionLifecycle(latestTask, "failed");
@@ -2042,7 +2297,13 @@ Reply to confirm receipt or contact support if you have questions.
                     let activeNormalizedInput = normalizedInput;
 
                     const attemptNumber = (step.attempts ?? 0) + 1;
-                    const idempotencyKey = this.buildIdempotencyKey(taskId, step.stepId, attemptNumber);
+                    const idempotencyKey = this.buildToolIdempotencyKey({
+                        taskId,
+                        runId: this.getCurrentRunId(),
+                        stepId: step.stepId,
+                        toolName: activeToolName,
+                        params: activeNormalizedInput,
+                    });
 
                     let executionPayload: ExecutionActionRecord = {
                         taskId,
@@ -2055,6 +2316,14 @@ Reply to confirm receipt or contact support if you have questions.
                         attempt: attemptNumber,
                         idempotencyKey,
                     };
+
+                    await this.persistShadowExecutionState(latestTask, {
+                        type: "TOOL_STARTED",
+                        stepId: step.stepId,
+                        toolName: activeToolName,
+                        attempt: attemptNumber,
+                        idempotencyKey,
+                    });
 
                     await this.updatePlanStepState(taskId, step.stepId, {
                         selectedToolName: activeToolName,
@@ -2070,6 +2339,12 @@ Reply to confirm receipt or contact support if you have questions.
 
                     let clarification = this.getClarificationPayload(executed);
                     if (clarification) {
+                        await this.persistShadowExecutionState(latestTask, {
+                            type: "CLARIFICATION_REQUIRED",
+                            reason: "Tool execution requires clarification.",
+                            question: clarification.question,
+                            pendingResolution: clarification.pendingResolution ?? undefined,
+                        });
                         await this.updatePlanStepState(taskId, step.stepId, {
                             state: "blocked",
                             lastError: clarification.question,
@@ -2148,7 +2423,13 @@ Reply to confirm receipt or contact support if you have questions.
                                             ...executionPayload,
                                             toolName: activeToolName,
                                             parameters: activeNormalizedInput,
-                                            idempotencyKey: this.buildIdempotencyKey(taskId, step.stepId, attemptNumber + 1),
+                                            idempotencyKey: this.buildToolIdempotencyKey({
+                                                taskId,
+                                                runId: this.getCurrentRunId(),
+                                                stepId: step.stepId,
+                                                toolName: activeToolName,
+                                                params: activeNormalizedInput,
+                                            }),
                                         };
 
                                         await this.updatePlanStepState(taskId, step.stepId, {
@@ -2165,6 +2446,12 @@ Reply to confirm receipt or contact support if you have questions.
 
                                         clarification = this.getClarificationPayload(executed);
                                         if (clarification) {
+                                            await this.persistShadowExecutionState(latestTask, {
+                                                type: "CLARIFICATION_REQUIRED",
+                                                reason: "Tool execution requires clarification.",
+                                                question: clarification.question,
+                                                pendingResolution: clarification.pendingResolution ?? undefined,
+                                            });
                                             await this.updatePlanStepState(taskId, step.stepId, {
                                                 state: "blocked",
                                                 lastError: clarification.question,
@@ -2198,6 +2485,7 @@ Reply to confirm receipt or contact support if you have questions.
                         }
                     }
 
+                    await this.persistShadowExecutionState(latestTask, { type: "TOOL_OBSERVED" });
                     lastResult = await this.observe({
                         task: latestTask,
                         action: executionPayload,
@@ -2208,6 +2496,7 @@ Reply to confirm receipt or contact support if you have questions.
                         verification: null,
                     }, executed);
 
+                    await this.persistShadowExecutionState(latestTask, { type: "TOOL_VERIFIED" });
                     lastVerification = await this.verify(lastResult, {
                         task: latestTask,
                         action: executionPayload,
@@ -2219,6 +2508,7 @@ Reply to confirm receipt or contact support if you have questions.
                     });
 
                     if (lastVerification.success) {
+                        await this.persistShadowExecutionState(latestTask, { type: "STEP_COMPLETED" });
                         await this.updatePlanStepState(taskId, step.stepId, {
                             state: "completed",
                             completedAt: new Date(),
@@ -2231,6 +2521,16 @@ Reply to confirm receipt or contact support if you have questions.
                         });
 
                         if (plan.steps.every((entry) => entry.state === "completed")) {
+                            await this.persistShadowExecutionState(latestTask, {
+                                type: "GOAL_ACHIEVED",
+                                finishedAt: new Date().toISOString(),
+                                runId: this.getCurrentRunId(),
+                                result: {
+                                    confidence: lastVerification.confidence,
+                                    summary: lastResult.summary,
+                                    evidence: lastResult.evidence,
+                                },
+                            });
                             await this.transitionLifecycle(latestTask, "completed");
                             await this.updateTask(latestTask, {
                                 status: "completed",
@@ -2254,16 +2554,36 @@ Reply to confirm receipt or contact support if you have questions.
                     const attempted = (step.attempts ?? 0) + 1;
 
                     if (attempted < (step.maxAttempts ?? 3)) {
+                        await this.persistShadowExecutionState(latestTask, {
+                            type: "ERROR_OCCURRED",
+                            reason: lastResult.error ?? "Execution failed",
+                            retryable: true,
+                            category: "verification_failed",
+                            retryCount: attempted,
+                            maxRetries: step.maxAttempts ?? 3,
+                            nextRetryAt: new Date(Date.now() + 1000).toISOString(),
+                            finishedAt: new Date().toISOString(),
+                        });
                         await this.updatePlanStepState(taskId, step.stepId, {
                             state: "retry_scheduled",
                             selectedToolName: activeToolName,
                             lastError: lastResult.error ?? "Execution failed",
                         });
 
-                        await this.transitionLifecycle(latestTask, "retry_scheduled");
-                        await waitForSignal(this.getBackoffDelay(attempted), this.currentExecutionSignal ?? undefined);
-                        await this.transitionLifecycle(latestTask, "ready");
-                        continue;
+                        await scheduleTaskRetry(latestTask, new Error(lastResult.error ?? "Execution failed"), {
+                            runId: this.currentRunId,
+                            actionType: this.mapToolNameToActionType(activeToolName),
+                            emit: async (payload) => {
+                                await this.onExecutionUpdate?.(payload);
+                            },
+                        });
+                        return {
+                            completed: false,
+                            retryCount: typeof latestTask.retryCount === "number" ? latestTask.retryCount : 0,
+                            maxRetries: typeof latestTask.maxRetries === "number" ? latestTask.maxRetries : 2,
+                            result: lastResult,
+                            verification: lastVerification,
+                        };
                     }
 
                     await this.updatePlanStepState(taskId, step.stepId, {
@@ -2277,6 +2597,15 @@ Reply to confirm receipt or contact support if you have questions.
                         },
                     });
 
+                    await this.persistShadowExecutionState(latestTask, {
+                        type: "ERROR_OCCURRED",
+                        reason: lastResult.error ?? "Verification failed",
+                        retryable: false,
+                        category: "verification_failed",
+                        retryCount: attempted,
+                        maxRetries: step.maxAttempts ?? 3,
+                        finishedAt: new Date().toISOString(),
+                    });
                     await this.transitionLifecycle(latestTask, "failed");
                     await this.appendCheckpoint(latestTask, {
                         step: "adjust",
@@ -2317,7 +2646,9 @@ Reply to confirm receipt or contact support if you have questions.
         } finally {
             watchdog.stop();
             this.currentExecutionSignal = null;
-            await this.releaseTaskLeaseFn(taskId, this.workerId);
+            if (!leaseHeld) {
+                await this.releaseTaskLeaseFn(taskId, this.workerId);
+            }
         }
     }
 
@@ -2377,8 +2708,127 @@ Reply to confirm receipt or contact support if you have questions.
         return Math.max(1000, Number(process.env.TASK_AGENT_TOOL_TIMEOUT_MS || 60000));
     }
 
-    private buildIdempotencyKey(taskId: string, stepId: string, attempt: number) {
-        return `${taskId}:${stepId}:${attempt}`;
+    private stableStringify(value: unknown): string {
+        if (value === undefined || typeof value === "function" || typeof value === "symbol") {
+            return "null";
+        }
+        if (typeof value === "bigint") {
+            return JSON.stringify(value.toString());
+        }
+        if (value === null || typeof value !== "object") {
+            return JSON.stringify(value) ?? "null";
+        }
+
+        if (Array.isArray(value)) {
+            return `[${value.map((entry) => this.stableStringify(entry)).join(",")}]`;
+        }
+
+        const record = value as Record<string, unknown>;
+        return `{${Object.keys(record)
+            .filter((key) => {
+                const entry = record[key];
+                return entry !== undefined && typeof entry !== "function" && typeof entry !== "symbol";
+            })
+            .sort()
+            .map((key) => `${JSON.stringify(key)}:${this.stableStringify(record[key])}`)
+            .join(",")}}`;
+    }
+
+    private buildToolIdempotencyKey(args: {
+        taskId: string;
+        runId: string;
+        stepId: string | null;
+        toolName: string;
+        params: unknown;
+    }): string {
+        const canonical = this.stableStringify(args.params ?? {});
+        return createHash("sha256")
+            .update(`${args.taskId}|${args.runId}|${args.stepId ?? "default"}|${args.toolName}|${canonical}`)
+            .digest("hex")
+            .slice(0, 64);
+    }
+
+    private async guardIdempotentToolExecution(
+        payload: ExecutionActionRecord
+    ): Promise<{ proceed: boolean; cached?: ActionExecutionResult }> {
+        if (!payload.idempotencyKey || mongoose.connection.readyState !== 1) {
+            return { proceed: true };
+        }
+
+        const existing = await TaskActionModel.findOne({ idempotencyKey: payload.idempotencyKey }).lean().exec();
+        if (existing) {
+            if (existing.executionState === "succeeded" && existing.summary) {
+                return {
+                    proceed: false,
+                    cached: {
+                        summary: existing.summary,
+                        adapterSuccess: true,
+                        evidence: {
+                            toolName: payload.toolName,
+                            idempotentReplay: true,
+                            parameters: existing.parameters ?? {},
+                        },
+                    },
+                };
+            }
+
+            return {
+                proceed: false,
+                cached: {
+                    summary: "Skipped duplicate in-flight tool execution.",
+                    adapterSuccess: false,
+                    evidence: { toolName: payload.toolName, idempotentReplay: true },
+                    error: "duplicate_in_flight",
+                },
+            };
+        }
+
+        try {
+            await createTaskAction({
+                taskId: payload.taskId,
+                conversationId: payload.conversationId,
+                actorType: "agent",
+                actorId: null,
+                actionType: this.mapToolNameToActionType(payload.toolName),
+                toolName: payload.toolName,
+                messageId: payload.messageId,
+                parameters: payload.parameters ?? {},
+                executionState: "running",
+                summary: `Tool execution started: ${payload.toolName}`,
+                error: null,
+                patch: { before: null, after: { runId: this.currentRunId, stepId: payload.stepId, attempt: payload.attempt } },
+                reason: "execution_idempotency_guard",
+                idempotencyKey: payload.idempotencyKey,
+            });
+        } catch (error) {
+            const maybeMongo = error as { code?: number };
+            if (maybeMongo?.code === 11000) {
+                return this.guardIdempotentToolExecution(payload);
+            }
+            throw error;
+        }
+
+        return { proceed: true };
+    }
+
+    private async finalizeIdempotentToolExecution(
+        idempotencyKey: string | undefined,
+        result: ActionExecutionResult
+    ): Promise<void> {
+        if (!idempotencyKey || mongoose.connection.readyState !== 1) {
+            return;
+        }
+
+        await TaskActionModel.updateOne(
+            { idempotencyKey },
+            {
+                $set: {
+                    executionState: result.adapterSuccess ? "succeeded" : "failed",
+                    summary: result.summary,
+                    error: result.error ?? null,
+                },
+            }
+        ).exec();
     }
 
     private async observe(_context: LoopContext, result: ActionExecutionResult): Promise<ActionExecutionResult> {
@@ -2392,11 +2842,24 @@ Reply to confirm receipt or contact support if you have questions.
     }
 
     private async execute(payload: ExecutionActionRecord, options?: ExecutionOptions): Promise<ActionExecutionResult> {
+        const idempotencyGuard = await this.guardIdempotentToolExecution(payload);
+        if (!idempotencyGuard.proceed && idempotencyGuard.cached) {
+            logExecution("info", {
+                event: "tool.idempotent_replay",
+                workerId: this.workerId,
+                runId: this.currentRunId ?? undefined,
+                taskId: payload.taskId,
+                toolName: payload.toolName,
+            });
+            return idempotencyGuard.cached;
+        }
+
         const tool = this.toolRegistry.get(payload.toolName);
         const runId = this.getCurrentRunId();
         const toolTimeoutMs = this.getToolTimeoutMs();
 
-        console.log("agent-runner step:execute", {
+        logExecution("info", {
+            event: "tool.execute",
             runId,
             stepId: payload.stepId ?? null,
             attempt: payload.attempt ?? null,
@@ -2470,7 +2933,10 @@ Reply to confirm receipt or contact support if you have questions.
                     },
                 });
 
-                console.log("agent-runner step:tool-execute", {
+                await this.finalizeIdempotentToolExecution(payload.idempotencyKey ?? undefined, result);
+
+                logExecution("info", {
+                    event: "tool.completed",
                     runId,
                     stepId: payload.stepId ?? null,
                     toolName: tool.name,

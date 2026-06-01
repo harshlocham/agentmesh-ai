@@ -4,6 +4,7 @@ import { create } from "zustand";
 import type {
     MessageSemanticUpdatedPayload,
     TaskCreatedPayload,
+    TaskExecutionEventRecord,
     TaskExecutionUpdatedPayload,
     TaskLinkedToMessagePayload,
     TaskRecord,
@@ -23,6 +24,7 @@ interface TaskStore {
     linksByMessageId: Record<string, TaskLinkState>;
     semanticByMessageId: Record<string, MessageSemanticUpdatedPayload>;
     executionByTaskId: Record<string, TaskExecutionUpdatedPayload>;
+    executionEventsByTaskId: Record<string, TaskExecutionEventRecord[]>;
 
     setConversationTasks: (conversationId: string, tasks: TaskRecord[]) => void;
     upsertTask: (task: TaskRecord) => void;
@@ -30,6 +32,8 @@ interface TaskStore {
     linkTaskToMessage: (payload: TaskLinkedToMessagePayload) => void;
     setMessageSemanticState: (payload: MessageSemanticUpdatedPayload) => void;
     setTaskExecutionState: (payload: TaskExecutionUpdatedPayload) => void;
+    setExecutionEvents: (taskId: string, events: TaskExecutionEventRecord[]) => void;
+    appendExecutionEvent: (event: TaskExecutionEventRecord) => void;
     removeTask: (taskId: string) => void;
     resetConversationTasks: (conversationId: string) => void;
     handleTaskCreated: (payload: TaskCreatedPayload) => void;
@@ -100,6 +104,7 @@ const useTaskStore = create<TaskStore>((set, get) => ({
     linksByMessageId: {},
     semanticByMessageId: {},
     executionByTaskId: {},
+    executionEventsByTaskId: {},
 
     setConversationTasks: (conversationId, tasks) =>
         set((state) => {
@@ -207,11 +212,43 @@ const useTaskStore = create<TaskStore>((set, get) => ({
         })),
 
     setTaskExecutionState: (payload) =>
-        set((state) => ({
+        set((state) => {
+            const nextEvents = { ...state.executionEventsByTaskId };
+            if (payload.runId && typeof payload.sequence === "number") {
+                const existing = nextEvents[payload.taskId] ?? [];
+                const dedupeKey = `${payload.runId}:${payload.sequence}`;
+                if (!existing.some((entry) => `${entry.runId}:${entry.sequence}` === dedupeKey)) {
+                    nextEvents[payload.taskId] = [
+                        ...existing,
+                        {
+                            _id: dedupeKey,
+                            taskId: payload.taskId,
+                            conversationId: payload.conversationId,
+                            runId: payload.runId,
+                            sequence: payload.sequence,
+                            type: "phase_transition",
+                            phase: payload.phase ?? "reason",
+                            payload: {
+                                state: payload.state,
+                                step: payload.step,
+                                summary: payload.summary,
+                                error: payload.error,
+                                toolName: payload.details?.toolName ?? null,
+                            },
+                            createdAt: typeof payload.updatedAt === "string"
+                                ? payload.updatedAt
+                                : payload.updatedAt.toISOString(),
+                        },
+                    ];
+                }
+            }
+
+            return {
             executionByTaskId: {
                 ...state.executionByTaskId,
                 [payload.taskId]: payload,
             },
+            executionEventsByTaskId: nextEvents,
             tasksById: state.tasksById[payload.taskId]
                 ? {
                     ...state.tasksById,
@@ -232,7 +269,32 @@ const useTaskStore = create<TaskStore>((set, get) => ({
                     },
                 }
                 : state.tasksById,
+        };
+        }),
+
+    setExecutionEvents: (taskId, events) =>
+        set((state) => ({
+            executionEventsByTaskId: {
+                ...state.executionEventsByTaskId,
+                [taskId]: events,
+            },
         })),
+
+    appendExecutionEvent: (event) =>
+        set((state) => {
+            const existing = state.executionEventsByTaskId[event.taskId] ?? [];
+            const dedupeKey = `${event.runId}:${event.sequence}`;
+            if (existing.some((entry) => `${entry.runId}:${entry.sequence}` === dedupeKey)) {
+                return {};
+            }
+
+            return {
+                executionEventsByTaskId: {
+                    ...state.executionEventsByTaskId,
+                    [event.taskId]: [...existing, event],
+                },
+            };
+        }),
 
     removeTask: (taskId) =>
         set((state) => {
@@ -250,9 +312,16 @@ const useTaskStore = create<TaskStore>((set, get) => ({
                 ),
             };
 
+            const nextExecutionByTaskId = { ...state.executionByTaskId };
+            delete nextExecutionByTaskId[taskId];
+            const nextExecutionEventsByTaskId = { ...state.executionEventsByTaskId };
+            delete nextExecutionEventsByTaskId[taskId];
+
             return {
                 tasksById: nextTasksById,
                 tasksByConversation: nextTasksByConversation,
+                executionByTaskId: nextExecutionByTaskId,
+                executionEventsByTaskId: nextExecutionEventsByTaskId,
             };
         }),
 

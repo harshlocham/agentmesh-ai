@@ -12,6 +12,11 @@ import * as taskModule from "@chat/db/models/Task";
 import { RetryManager } from "./services/retry-manager.js";
 import AgentRunner from "./services/agent-runner.js";
 import { evaluateExecutionPolicy } from "./services/execution-policy.js";
+import { withExecutionLease } from "./services/lease.service.js";
+import { startRetryScheduler } from "./services/retry-scheduler.js";
+import { persistExecutionUpdatePayload } from "./services/execution-event.service.js";
+import { logExecution } from "./services/execution-logger.js";
+import { startStuckTaskDetector } from "./services/stuck-task-detector.js";
 import { createInternalRequestHeaders } from "@chat/types/utils/internal-bridge-auth";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
@@ -303,7 +308,25 @@ function getIntelligenceFn() {
 }
 
 async function emitTaskExecutionUpdate(payload: TaskExecutionUpdatedPayload) {
-    await emitInternal("/internal/task-execution-updated", payload.conversationId, payload);
+    let enriched = payload;
+    if (payload.runId) {
+        try {
+            const persisted = await persistExecutionUpdatePayload(payload);
+            if (persisted?.sequence) {
+                enriched = { ...payload, sequence: persisted.sequence };
+            }
+        } catch (error) {
+            logExecution("warn", {
+                event: "execution_event.persist_failed",
+                workerId: WORKER_ID,
+                taskId: payload.taskId,
+                runId: payload.runId ?? undefined,
+                error: error instanceof Error ? error.message : String(error),
+            });
+        }
+    }
+
+    await emitInternal("/internal/task-execution-updated", enriched.conversationId, enriched);
 }
 
 function clampConfidence(value: number) {
@@ -1146,10 +1169,14 @@ async function runExecutionPlan(payload: NormalizedTaskExecutionRequestedPayload
     return context.result;
 }
 
+function provisionalRunId(taskId: string): string {
+    return `run-${taskId}-${Date.now()}`;
+}
+
 async function processTaskExecutionRequested(payload: NormalizedTaskExecutionRequestedPayload) {
     const queuedAt = new Date().toISOString();
     const actionSummary = `${payload.actionType} requested for task ${payload.taskId}`;
-    const runId = `run-${payload.taskId}-${Date.now()}`;
+    const provisionalRun = provisionalRunId(payload.taskId);
 
     await emitTaskExecutionUpdate({
         taskId: payload.taskId,
@@ -1159,7 +1186,7 @@ async function processTaskExecutionRequested(payload: NormalizedTaskExecutionReq
         summary: "Execution request queued from chat task.",
         error: null,
         updatedAt: queuedAt,
-        runId,
+        runId: provisionalRun,
         phase: "intake",
         step: "queued",
         progress: 5,
@@ -1211,7 +1238,7 @@ async function processTaskExecutionRequested(payload: NormalizedTaskExecutionReq
             summary: "Execution blocked by policy.",
             error: blockedReason,
             updatedAt: new Date().toISOString(),
-            runId,
+            runId: provisionalRun,
             phase: "policy",
             step: "policy_blocked",
             progress: 100,
@@ -1287,7 +1314,7 @@ async function processTaskExecutionRequested(payload: NormalizedTaskExecutionReq
             summary: "Awaiting human approval before execution.",
             error: [...policyDecision.reasons, ...(lowConfidence ? [`Low confidence (${confidence.toFixed(2)}).`] : [])].join(" ") || "Approval required before executing this action.",
             updatedAt: new Date().toISOString(),
-            runId,
+            runId: provisionalRun,
             phase: "policy",
             step: "approval_pending",
             progress: 20,
@@ -1295,82 +1322,105 @@ async function processTaskExecutionRequested(payload: NormalizedTaskExecutionReq
         return;
     }
 
-    await emitTaskExecutionUpdate({
-        taskId: payload.taskId,
-        conversationId: payload.conversationId,
-        state: "running",
-        actionType: payload.actionType,
-        summary: PERSISTENT_LOOP_ENABLED
-            ? "Execution approved by policy. Starting persistent step-based runner."
-            : "Execution approved by policy. Starting autonomous runner.",
-        error: null,
-        updatedAt: new Date().toISOString(),
-        runId,
-        phase: "policy",
-        step: "policy_approved",
-        progress: 25,
-        details: {
-            verification: {
-                success: true,
-                confidence: clampConfidence(confidence),
-            },
-        },
-    });
+    const leaseResult = await withExecutionLease(
+        { taskId: payload.taskId, workerId: WORKER_ID },
+        async (handle, abortSignal) => {
+            const runId = handle.runId;
 
-    try {
-        const outcome = await agentRunner.runTask(payload.taskId);
-        await emitTaskExecutionUpdate({
+            await emitTaskExecutionUpdate({
+                taskId: payload.taskId,
+                conversationId: payload.conversationId,
+                state: "running",
+                actionType: payload.actionType,
+                summary: PERSISTENT_LOOP_ENABLED
+                    ? "Execution approved by policy. Starting persistent step-based runner."
+                    : "Execution approved by policy. Starting autonomous runner.",
+                error: null,
+                updatedAt: new Date().toISOString(),
+                runId,
+                phase: "policy",
+                step: "policy_approved",
+                progress: 25,
+                details: {
+                    verification: {
+                        success: true,
+                        confidence: clampConfidence(confidence),
+                    },
+                },
+            });
+
+            try {
+                const outcome = await agentRunner.runTask(payload.taskId, {
+                    runId,
+                    workerId: WORKER_ID,
+                    leaseHeld: true,
+                    abortSignal,
+                });
+                await emitTaskExecutionUpdate({
+                    taskId: payload.taskId,
+                    conversationId: payload.conversationId,
+                    state: outcome.completed ? "succeeded" : "failed",
+                    actionType: payload.actionType,
+                    summary: outcome.result?.summary ?? (outcome.completed ? "Task completed." : "Task failed."),
+                    error: outcome.completed ? null : (outcome.result?.error ?? "Execution failed."),
+                    updatedAt: new Date().toISOString(),
+                    runId,
+                    phase: "finalize",
+                    step: outcome.completed ? "completed" : "failed",
+                    progress: 100,
+                    details: {
+                        toolOutput: outcome.result?.evidence ?? null,
+                        verification: outcome.verification
+                            ? {
+                                success: outcome.verification.success,
+                                confidence: clampConfidence(outcome.verification.confidence),
+                            }
+                            : null,
+                    },
+                    structuredOutput: {
+                        status: outcome.completed ? "completed" : "failed",
+                        confidence: clampConfidence(outcome.verification?.confidence ?? 0),
+                        summary: outcome.result?.summary ?? (outcome.completed ? "Task completed." : "Task failed."),
+                        error: outcome.completed ? null : (outcome.result?.error ?? "Execution failed."),
+                        evidence: outcome.result?.evidence ?? null,
+                    },
+                });
+                return outcome;
+            } catch (error) {
+                const message = error instanceof Error ? error.message : "Task execution failed";
+                await emitTaskExecutionUpdate({
+                    taskId: payload.taskId,
+                    conversationId: payload.conversationId,
+                    state: "failed",
+                    actionType: payload.actionType,
+                    summary: null,
+                    error: message,
+                    updatedAt: new Date().toISOString(),
+                    runId,
+                    phase: "finalize",
+                    step: "exception",
+                    progress: 100,
+                    structuredOutput: {
+                        status: "failed",
+                        confidence: 0,
+                        summary: "Task execution failed.",
+                        error: message,
+                        evidence: null,
+                    },
+                });
+                throw error;
+            }
+        }
+    );
+
+    if (leaseResult && typeof leaseResult === "object" && "skipped" in leaseResult && leaseResult.skipped === "lease_busy") {
+        logExecution("info", {
+            event: "lease.busy",
+            workerId: WORKER_ID,
             taskId: payload.taskId,
             conversationId: payload.conversationId,
-            state: outcome.completed ? "succeeded" : "failed",
-            actionType: payload.actionType,
-            summary: outcome.result?.summary ?? (outcome.completed ? "Task completed." : "Task failed."),
-            error: outcome.completed ? null : (outcome.result?.error ?? "Execution failed."),
-            updatedAt: new Date().toISOString(),
-            runId,
-            phase: "finalize",
-            step: outcome.completed ? "completed" : "failed",
-            progress: 100,
-            details: {
-                toolOutput: outcome.result?.evidence ?? null,
-                verification: outcome.verification
-                    ? {
-                        success: outcome.verification.success,
-                        confidence: clampConfidence(outcome.verification.confidence),
-                    }
-                    : null,
-            },
-            structuredOutput: {
-                status: outcome.completed ? "completed" : "failed",
-                confidence: clampConfidence(outcome.verification?.confidence ?? 0),
-                summary: outcome.result?.summary ?? (outcome.completed ? "Task completed." : "Task failed."),
-                error: outcome.completed ? null : (outcome.result?.error ?? "Execution failed."),
-                evidence: outcome.result?.evidence ?? null,
-            },
         });
-    } catch (error) {
-        const message = error instanceof Error ? error.message : "Task execution failed";
-        await emitTaskExecutionUpdate({
-            taskId: payload.taskId,
-            conversationId: payload.conversationId,
-            state: "failed",
-            actionType: payload.actionType,
-            summary: null,
-            error: message,
-            updatedAt: new Date().toISOString(),
-            runId,
-            phase: "finalize",
-            step: "exception",
-            progress: 100,
-            structuredOutput: {
-                status: "failed",
-                confidence: 0,
-                summary: "Task execution failed.",
-                error: message,
-                evidence: null,
-            },
-        });
-        throw error;
+        return;
     }
 }
 
@@ -1566,6 +1616,9 @@ async function run() {
     if (redis) {
         await redis.connect();
     }
+
+    startRetryScheduler(WORKER_ID);
+    startStuckTaskDetector(WORKER_ID);
 
     // eslint-disable-next-line no-constant-condition
     while (true) {

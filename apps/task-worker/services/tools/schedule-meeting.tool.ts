@@ -30,6 +30,7 @@ export class ScheduleMeetingTool implements Tool {
                 conversationId: context.conversationId,
                 triggerMessageId: context.messageId,
                 parameters: input,
+                idempotencyKey: context.metadata?.idempotencyKey ?? null,
             }),
             signal: context.signal,
         });

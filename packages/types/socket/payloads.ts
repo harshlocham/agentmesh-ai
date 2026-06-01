@@ -267,7 +267,8 @@ export interface TaskExecutionUpdatedPayload {
     error: string | null;
     updatedAt: Date | string;
     runId?: string | null;
-    phase?: "intake" | "policy" | "reason" | "tool_execute" | "observe" | "verify" | "finalize";
+    sequence?: number;
+    phase?: "intake" | "policy" | "reason" | "tool_execute" | "observe" | "verify" | "finalize" | "retry";
     step?: string | null;
     progress?: number;
     attempt?: number;

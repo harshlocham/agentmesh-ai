@@ -1,6 +1,30 @@
+import mongoose from "mongoose";
 import * as dbModule from "@chat/db";
 import ContactModel from "@chat/db/models/Contact";
 import { User } from "@chat/db/models/User";
+
+function isContactResolutionDebugEnabled(): boolean {
+    return process.env.CONTACT_RESOLUTION_DEBUG === "1"
+        || process.env.CONTACT_RESOLUTION_DEBUG === "true";
+}
+
+function logContactResolution(event: string, payload: Record<string, unknown>): void {
+    if (!isContactResolutionDebugEnabled()) {
+        return;
+    }
+    console.log(`contact-resolution ${event}`, payload);
+}
+
+function toUserIdQueryValue(userId: string): string | mongoose.Types.ObjectId {
+    if (mongoose.isValidObjectId(userId)) {
+        try {
+            return new mongoose.Types.ObjectId(userId);
+        } catch {
+            return userId;
+        }
+    }
+    return userId;
+}
 
 const connectToDatabase =
     (dbModule as unknown as { connectToDatabase?: () => Promise<unknown> }).connectToDatabase
@@ -195,17 +219,37 @@ export async function createContact(input: CreateContactInput) {
 
 export async function findByExactEmail(userId: string, email: string) {
     await connectToDatabase();
-    return ContactModel.findOne({ userId, email: normalizeEmail(email) }).lean().exec();
+    const userIdQuery = toUserIdQueryValue(userId);
+    const normalizedEmailValue = normalizeEmail(email);
+    const result = await ContactModel.findOne({
+        userId: userIdQuery,
+        email: normalizedEmailValue,
+    }).lean().exec();
+    logContactResolution("findByExactEmail", {
+        userId,
+        userIdCasted: String(userIdQuery),
+        email: normalizedEmailValue,
+        found: Boolean(result),
+    });
+    return result;
 }
 
 export async function findByExactName(userId: string, name: string) {
     await connectToDatabase();
 
     const normalizedName = normalizeName(name);
-    return ContactModel.find({
-        userId,
+    const userIdQuery = toUserIdQueryValue(userId);
+    const results = await ContactModel.find({
+        userId: userIdQuery,
         name: { $regex: `^${normalizedName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, $options: "i" },
     }).lean().exec();
+    logContactResolution("findByExactName", {
+        userId,
+        userIdCasted: String(userIdQuery),
+        name: normalizedName,
+        matchCount: results.length,
+    });
+    return results;
 }
 
 export async function findByAlias(userId: string, alias: string) {
@@ -216,10 +260,18 @@ export async function findByAlias(userId: string, alias: string) {
         return [];
     }
 
-    return ContactModel.find({
-        userId,
+    const userIdQuery = toUserIdQueryValue(userId);
+    const results = await ContactModel.find({
+        userId: userIdQuery,
         aliases: normalizedAlias,
     }).lean().exec();
+    logContactResolution("findByAlias", {
+        userId,
+        userIdCasted: String(userIdQuery),
+        alias: normalizedAlias,
+        matchCount: results.length,
+    });
+    return results;
 }
 
 function toContactMatch(value: { name?: unknown; email?: unknown }): ContactMatch | null {
@@ -241,6 +293,13 @@ export async function resolveContactReference(userId: string, reference: string)
     if (!trimmedReference) {
         return { success: false, error: "Contact reference is empty." };
     }
+
+    logContactResolution("start", {
+        userId,
+        userIdLength: userId.length,
+        userIdIsValidObjectId: mongoose.isValidObjectId(userId),
+        reference: trimmedReference,
+    });
 
     async function resolveByLocalPart(localPart: string): Promise<ContactResolutionResult | null> {
         const normalizedLocalPart = localPart.trim();
@@ -388,6 +447,13 @@ export async function resolveContactReference(userId: string, reference: string)
     if (userMatch) {
         return userMatch;
     }
+
+    logContactResolution("not_found", {
+        userId,
+        reference: trimmedReference,
+        exactNameMatches: exactNameMatches.length,
+        aliasMatches: aliasMatches.length,
+    });
 
     return {
         success: false,

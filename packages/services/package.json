@@ -15,6 +15,11 @@
             "types": "./dist/services/outbox.service.d.ts",
             "default": "./dist/services/outbox.service.js"
         },
+        "./execution-event.service": {
+            "import": "./dist/services/execution-event.service.js",
+            "types": "./dist/services/execution-event.service.d.ts",
+            "default": "./dist/services/execution-event.service.js"
+        },
         "./task-intelligence.service": {
             "import": "./dist/services/task-intelligence.service.js",
             "types": "./dist/services/task-intelligence.service.d.ts",

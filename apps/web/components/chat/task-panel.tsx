@@ -1,10 +1,11 @@
 "use client";
 
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import type { TaskRecord, TaskStatus } from "@chat/types";
+import type { TaskExecutionEventRecord, TaskRecord, TaskStatus } from "@chat/types";
 import { authenticatedFetch } from "@/lib/utils/api";
 import { getSocket } from "@/hooks/socketClient";
+import { useTaskExecution } from "@/hooks/useTaskExecution";
 import useTaskStore from "@/store/task-store";
 import { Button } from "@/components/ui/button";
 import { Check, Loader2, Sparkles } from "lucide-react";
@@ -16,6 +17,7 @@ interface TaskPanelProps {
 const TASK_STATUSES: TaskStatus[] = ["pending", "executing", "completed", "failed", "partial"];
 const EMPTY_TASK_IDS: string[] = [];
 const EMPTY_STEPS: ExecutionStep[] = [];
+const EMPTY_EXECUTION_EVENTS: TaskExecutionEventRecord[] = [];
 
 type ExecutionStepStatus = "pending" | "running" | "completed";
 
@@ -36,98 +38,6 @@ function formatDueDate(value: string | null) {
     const parsed = new Date(value);
     if (Number.isNaN(parsed.getTime())) return "No due date";
     return parsed.toLocaleDateString();
-}
-
-function getExecutionSteps(task: TaskRecord): ExecutionStep[] {
-    switch (task.status) {
-        case "pending":
-            return [
-                {
-                    id: "understand",
-                    label: "Understanding the request",
-                    detail: "Reading the latest context and intent.",
-                    status: "running",
-                },
-                {
-                    id: "prepare",
-                    label: "Preparing actions",
-                    detail: "Drafting the next execution steps.",
-                    status: "pending",
-                },
-                {
-                    id: "complete",
-                    label: "Finishing the execution",
-                    detail: "Waiting for the task to move forward.",
-                    status: "pending",
-                },
-            ];
-        case "executing":
-            return [
-                {
-                    id: "understand",
-                    label: "Understanding the request",
-                    detail: "The system has already parsed the task.",
-                    status: "completed",
-                },
-                {
-                    id: "prepare",
-                    label: "Preparing actions",
-                    detail: "Building the next response in real time.",
-                    status: "running",
-                },
-                {
-                    id: "complete",
-                    label: "Finishing the execution",
-                    detail: "Waiting for the final update.",
-                    status: "pending",
-                },
-            ];
-        case "partial":
-            return [
-                {
-                    id: "understand",
-                    label: "Understanding the request",
-                    detail: "The task is already fully parsed.",
-                    status: "completed",
-                },
-                {
-                    id: "prepare",
-                    label: "Preparing actions",
-                    detail: "The execution is waiting on a dependency.",
-                    status: "completed",
-                },
-                {
-                    id: "complete",
-                    label: "Resolving the blocker",
-                    detail: "Waiting for the next signal to continue.",
-                    status: "running",
-                },
-            ];
-        case "completed":
-        case "failed":
-            return [
-                {
-                    id: "understand",
-                    label: "Understanding the request",
-                    detail: "The task context was captured successfully.",
-                    status: "completed",
-                },
-                {
-                    id: "prepare",
-                    label: "Preparing actions",
-                    detail: "Execution steps were generated.",
-                    status: "completed",
-                },
-                {
-                    id: "complete",
-                    label: task.status === "completed" ? "Execution complete" : "Execution failed",
-                    detail: task.status === "completed" ? "The task finished cleanly." : "The task did not pass verification.",
-                    status: "completed",
-                },
-            ];
-        default:
-            return EMPTY_STEPS;
-    }
 }
 
 function getProgressValue(steps: ExecutionStep[]) {
@@ -238,9 +148,75 @@ const StepRow = memo(function StepRow({
 
 function TaskInlineCard({ task, onStatusChange }: TaskInlineCardProps) {
     const shouldReduceMotion = useReducedMotion();
-    const steps = useMemo(() => getExecutionSteps(task), [task]);
-    const progress = getProgressValue(steps);
-    const hasRunningStep = steps.some((step) => step.status === "running");
+    const executionView = useTaskExecution(task._id);
+    const setExecutionEvents = useTaskStore((state) => state.setExecutionEvents);
+    const appendExecutionEvent = useTaskStore((state) => state.appendExecutionEvent);
+    const executionEvents = useTaskStore((state) => state.executionEventsByTaskId[task._id] ?? EMPTY_EXECUTION_EVENTS);
+    const executionEventsRef = useRef(executionEvents);
+    useEffect(() => {
+        executionEventsRef.current = executionEvents;
+    }, [executionEvents]);
+
+    const steps = useMemo(
+        () => executionView.steps.map((step) => ({
+            id: step.id,
+            label: step.label,
+            detail: step.detail,
+            status: step.status,
+        })),
+        [executionView.steps]
+    );
+
+    const progress = executionView.progress > 0 ? executionView.progress : getProgressValue(steps);
+    const hasRunningStep = steps.some((step) => step.status === "running") || task.status === "executing";
+
+    const replayExecutionEvents = useCallback(async () => {
+        const currentEvents = executionEventsRef.current;
+        const activeRunId = task.executionRunId ?? currentEvents.at(-1)?.runId ?? null;
+        const runEvents = activeRunId
+            ? currentEvents.filter((event) => event.runId === activeRunId)
+            : currentEvents;
+        const lastSequence = runEvents.reduce((max, event) => Math.max(max, event.sequence), 0);
+        const searchParams = new URLSearchParams({ afterSequence: String(lastSequence) });
+        if (activeRunId) {
+            searchParams.set("runId", activeRunId);
+        }
+
+        try {
+            const response = await authenticatedFetch(
+                `/api/tasks/${task._id}/execution-events?${searchParams.toString()}`
+            );
+            if (!response.ok) return;
+            const payload = (await response.json()) as { events: TaskExecutionEventRecord[] };
+            if (payload.events.length === 0) {
+                return;
+            }
+            if (currentEvents.length === 0) {
+                setExecutionEvents(task._id, payload.events);
+                return;
+            }
+            for (const event of payload.events) {
+                appendExecutionEvent(event);
+            }
+        } catch (error) {
+            console.error("Failed to replay task execution events", error);
+        }
+    }, [appendExecutionEvent, setExecutionEvents, task._id, task.executionRunId]);
+
+    useEffect(() => {
+        void replayExecutionEvents();
+    }, [replayExecutionEvents]);
+
+    useEffect(() => {
+        const socket = getSocket();
+        const onConnect = () => {
+            void replayExecutionEvents();
+        };
+        socket.on("connect", onConnect);
+        return () => {
+            socket.off("connect", onConnect);
+        };
+    }, [replayExecutionEvents]);
 
     return (
         <motion.article
@@ -281,6 +257,24 @@ function TaskInlineCard({ task, onStatusChange }: TaskInlineCardProps) {
             </div>
 
             <div className="mt-4">
+                {executionView.runId && (
+                    <p className="mb-2 font-mono text-[10px] text-muted-foreground">
+                        run {executionView.runId}
+                        {executionView.durationMs !== null ? ` · ${Math.round(executionView.durationMs / 1000)}s` : ""}
+                    </p>
+                )}
+                {executionView.failureReason && (
+                    <p className="mb-2 text-xs text-destructive">{executionView.failureReason}</p>
+                )}
+                {executionView.retryStatus && (
+                    <p className="mb-2 text-xs text-amber-700 dark:text-amber-300">{executionView.retryStatus}</p>
+                )}
+                {executionView.approvalPending && (
+                    <p className="mb-2 text-xs text-amber-700 dark:text-amber-300">Awaiting human approval</p>
+                )}
+                {steps.length === 0 && task.status === "executing" && (
+                    <p className="mb-2 text-xs text-muted-foreground">Waiting for execution telemetry...</p>
+                )}
                 {hasRunningStep && (
                     <motion.div
                         initial={shouldReduceMotion ? false : { opacity: 0 }}

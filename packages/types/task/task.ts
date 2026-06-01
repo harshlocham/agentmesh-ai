@@ -40,6 +40,8 @@ export type TaskLinkType = "source" | "context" | "decision";
 
 export type TaskExecutionActionType = "create_github_issue" | "schedule_meeting" | "send_email" | "none";
 
+export type { ExecutionState, ExecutionStateHistoryEntry } from "./execution-state.js";
+
 export interface TaskResult {
     success: boolean;
     confidence: number;
@@ -122,6 +124,12 @@ export interface TaskRecord {
     leaseExpiresAt?: string | null;
     lastHeartbeatAt?: string | null;
     nextRetryAt?: string | null;
+    lastRetryReason?: string | null;
+    lastRetryAt?: string | null;
+    executionRunId?: string | null;
+    executionStartedAt?: string | null;
+    executionState?: import("./execution-state.js").ExecutionState;
+    stateHistory?: import("./execution-state.js").ExecutionStateHistoryEntry[];
     blockedReason?: string | null;
     pausedReason?: string | null;
     progress: number;
