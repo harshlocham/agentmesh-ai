@@ -36,7 +36,7 @@
 
 ## 2.0.3
 
-### Patch Change
+### Patch Changes
 
 - dc73990: task-worker: unify LLM boundary, preserve step IO, add self-heal and clarification flows; redact policy decisions and improve execution updates
 
