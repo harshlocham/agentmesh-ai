@@ -12,12 +12,12 @@ function buildToolIdempotencyKey(args: {
 }): string {
     const canonical = JSON.stringify(args.params ?? {});
     return createHash("sha256")
-        .update(`${args.taskId}|${args.runId}|${args.stepId ?? "default"}|${args.toolName}|${canonical}`)
+        .update(`${args.taskId}|${args.stepId ?? "default"}|${args.toolName}|${canonical}`)
         .digest("hex")
         .slice(0, 64);
 }
 
-test("idempotency key is stable for same run/tool/params", () => {
+test("idempotency key is stable for same task/step/tool/params", () => {
     const input = {
         taskId: "task-1",
         runId: "run-1",
@@ -30,6 +30,20 @@ test("idempotency key is stable for same run/tool/params", () => {
     const second = buildToolIdempotencyKey(input);
 
     assert.equal(first, second);
+});
+
+test("idempotency key survives runId changes after rerun or lease steal", () => {
+    const base = {
+        taskId: "task-1",
+        stepId: "step-a",
+        toolName: "send_email",
+        params: { to: "a@example.com", subject: "Hello" },
+    };
+
+    const firstRun = buildToolIdempotencyKey({ ...base, runId: "run-1" });
+    const stolenRun = buildToolIdempotencyKey({ ...base, runId: "run-2" });
+
+    assert.equal(firstRun, stolenRun);
 });
 
 test("idempotency key changes when params change", () => {

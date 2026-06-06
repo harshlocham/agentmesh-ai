@@ -403,7 +403,7 @@ test("persistent loop: acquires lease, heartbeats, and releases lease", async ()
     const harness = createRunnerHarness();
 
     await withMockedFetch(
-        [{ toolName: "send_email", arguments: { to: ["team@example.com"] } }],
+        [{ toolName: "send_email", arguments: { to: ["team@chatapp.dev"] } }],
         async () => {
             const result = await harness.runner.runTask("task-1");
             assert.equal(result.completed, true);
@@ -427,7 +427,7 @@ test("persistent loop: tool execution and verification exercise the runtime", as
     });
 
     await withMockedFetch(
-        [{ toolName: "send_email", arguments: { to: ["team@example.com"], subject: "Status update" } }],
+        [{ toolName: "send_email", arguments: { to: ["team@chatapp.dev"], subject: "Status update" } }],
         async () => {
             const outcome = await harness.runner.runTask("task-1");
 
@@ -445,7 +445,7 @@ test("persistent loop: uses memory + ranked tool decision", async () => {
     const harness = createRunnerHarness();
 
     await withMockedFetch(
-        [{ toolName: "send_email", arguments: { to: ["team@example.com"], subject: "Hi" } }],
+        [{ toolName: "send_email", arguments: { to: ["team@chatapp.dev"], subject: "Hi" } }],
         async () => {
             const result = await harness.runner.runTask("task-1");
             assert.equal(result.completed, true);
@@ -470,7 +470,7 @@ test("persistent loop: step-level failure triggers fallback step", async () => {
 
     await withMockedFetch(
         [
-            { toolName: "send_email", arguments: { to: ["team@example.com"] } },
+            { toolName: "send_email", arguments: { to: ["team@chatapp.dev"] } },
             { toolName: "create_github_issue", arguments: { title: "fallback" } },
         ],
         async () => {
@@ -502,7 +502,7 @@ test("persistent loop: immediate fallback remains blocked when dependency fails"
 
     await withMockedFetch(
         [
-            { toolName: "send_email", arguments: { to: ["team@example.com"] } },
+            { toolName: "send_email", arguments: { to: ["team@chatapp.dev"] } },
             { toolName: "create_github_issue", arguments: { title: "fallback" } },
         ],
         async () => {
@@ -522,7 +522,7 @@ test("persistent loop: writes reflection on terminal state", async () => {
     const harness = createRunnerHarness();
 
     await withMockedFetch(
-        [{ toolName: "send_email", arguments: { to: ["team@example.com"], subject: "done" } }],
+        [{ toolName: "send_email", arguments: { to: ["team@chatapp.dev"], subject: "done" } }],
         async () => {
             await harness.runner.runTask("task-1");
         }
@@ -541,8 +541,8 @@ test("persistent loop: self-heals a failed tool execution before retry schedulin
 
     await withMockedFetch(
         [
-            { toolName: "send_email", arguments: { to: ["team@example.com"], subject: "First attempt" } },
-            { toolName: "send_email", arguments: { to: ["team@example.com"], subject: "Corrected attempt" } },
+            { toolName: "send_email", arguments: { to: ["team@chatapp.dev"], subject: "First attempt" } },
+            { toolName: "send_email", arguments: { to: ["team@chatapp.dev"], subject: "Corrected attempt" } },
         ],
         async () => {
             const result = await harness.runner.runTask("task-1");

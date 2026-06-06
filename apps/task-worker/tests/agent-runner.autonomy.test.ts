@@ -241,7 +241,7 @@ test("autonomy: schedules meeting then sends follow-up email via LLM-selected to
     await withMockedFetch(
         [
             toolCallPayload("schedule_meeting", { summary: "Project sync", whenText: "tomorrow 10am" }),
-            toolCallPayload("send_email", { to: ["team@example.com"], subject: "Meeting scheduled" }),
+            toolCallPayload("send_email", { to: ["team@chatapp.dev"], subject: "Meeting scheduled" }),
         ],
         async () => {
             const outcome = await runner.runTask("task-1");
@@ -316,7 +316,7 @@ test("autonomy: creates GitHub issue then notifies team without predefined plan"
     await withMockedFetch(
         [
             toolCallPayload("create_github_issue", { title: "Bug", body: "Please fix", labels: ["bug"] }),
-            toolCallPayload("send_email", { to: ["team@example.com"], subject: "Issue created" }),
+            toolCallPayload("send_email", { to: ["team@chatapp.dev"], subject: "Issue created" }),
         ],
         async () => {
             const outcome = await runner.runTask("task-1");
@@ -411,7 +411,7 @@ test("autonomy: chained tasks adapt after a failed step", async () => {
         [
             toolCallPayload("create_github_issue", { title: "Primary attempt" }),
             toolCallPayload("schedule_meeting", { summary: "Fallback sync" }),
-            toolCallPayload("send_email", { to: ["team@example.com"], subject: "Update" }),
+            toolCallPayload("send_email", { to: ["team@chatapp.dev"], subject: "Update" }),
         ],
         async () => {
             const outcome = await runner.runTask("task-1");
@@ -487,7 +487,7 @@ test("autonomy: pauses for clarification and resumes with the user's reply", asy
                 needsClarification: true,
                 clarificationQuestion: "Who should receive the email?",
             },
-            toolCallPayload("send_email", { to: ["team@example.com"], subject: "Clarified follow-up" }),
+            toolCallPayload("send_email", { to: ["team@chatapp.dev"], subject: "Clarified follow-up" }),
         ],
         async () => {
             const paused = await runner.runTask("task-1");
@@ -495,7 +495,7 @@ test("autonomy: pauses for clarification and resumes with the user's reply", asy
             assert.equal(task.status, "waiting_for_input");
             assert.equal(task.pausedReason, "Who should receive the email?");
 
-            const resumed = await runner.resumeTask("task-1", "team@example.com");
+            const resumed = await runner.resumeTask("task-1", "team@chatapp.dev");
             assert.equal(resumed.completed, true);
             assert.equal(task.status, "completed");
             assert.equal(toolCalls.length, 1);

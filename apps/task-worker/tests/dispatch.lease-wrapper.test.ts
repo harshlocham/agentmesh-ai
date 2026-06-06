@@ -1,6 +1,11 @@
 import "./test-env.js";
 import assert from "node:assert/strict";
 import test from "node:test";
+import {
+    assertExecutionLeaseCompleted,
+    ExecutionLeaseBusyError,
+} from "../services/lease.service.js";
+
 type LeaseState = {
     owner: string | null;
     expiresAt: number;
@@ -82,4 +87,11 @@ test("dispatcher skips execution when lease is held by another worker", async ()
 
     const handle = await mockAcquire(taskId, "worker-1", "run-2", 5_000);
     assert.equal(handle, null);
+});
+
+test("lease-busy execution result is surfaced as retryable worker failure", () => {
+    assert.throws(
+        () => assertExecutionLeaseCompleted("task-dispatch-3", { skipped: "lease_busy" }),
+        ExecutionLeaseBusyError
+    );
 });
