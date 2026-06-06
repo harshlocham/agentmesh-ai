@@ -3,8 +3,7 @@ import { z } from "zod";
 import TaskModel from "@/models/Task";
 import { connectToDatabase } from "@/lib/Db/db";
 import { requireAuthUser } from "@/lib/utils/auth/requireAuthUser";
-import { requireConversationAccess } from "@/lib/utils/auth/requireConversationAccess";
-import { buildTaskActionIdempotencyKey, createTask, createTaskAction } from "@/lib/repositories/task.repo";
+import { createTask } from "@/lib/repositories/task.repo";
 import { normalizeTask } from "@/server/normalizers/task.normalizer";
 import { deriveTaskDedupeKey } from "@/lib/services/task.service";
 import { enqueueOutboxEvent } from "@/lib/services/outbox.service";
@@ -32,9 +31,6 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: "conversationId is required" }, { status: 400 });
     }
 
-    const access = await requireConversationAccess(conversationId, guard.user);
-    if (access.response) return access.response;
-
     const tasks = await TaskModel.find({ conversationId }).sort({ updatedAt: -1 }).limit(200).lean();
     return NextResponse.json(tasks.map(normalizeTask), { status: 200 });
 }
@@ -47,10 +43,6 @@ export async function POST(req: NextRequest) {
         await connectToDatabase();
 
         const body = createTaskBodySchema.parse(await req.json());
-
-        const access = await requireConversationAccess(body.conversationId, guard.user);
-        if (access.response) return access.response;
-
         const dedupeKey = deriveTaskDedupeKey({
             conversationId: body.conversationId,
             title: body.title,
@@ -95,43 +87,6 @@ export async function POST(req: NextRequest) {
 
         const normalized = normalizeTask(task);
 
-        const manualActionParams = {
-            titleHint: normalized.title,
-            descriptionHint: normalized.description ?? "",
-            content: [normalized.title, normalized.description].filter((part) => typeof part === "string" && part.trim().length > 0).join("\n\n"),
-        };
-
-        try {
-            await createTaskAction({
-                taskId: normalized._id,
-                conversationId: normalized.conversationId,
-                actorType: "user",
-                actorId: guard.user.id,
-                actionType: "none",
-                toolName: "none",
-                messageId: null,
-                parameters: manualActionParams,
-                executionState: "requested",
-                summary: "Manual task execution requested from task panel.",
-                error: null,
-                patch: {
-                    before: null,
-                    after: {
-                        actionType: "none",
-                        toolName: "none",
-                        source: "manual-task-panel",
-                    },
-                },
-                reason: "User-created task delegated to autonomous agent runner",
-                idempotencyKey: buildTaskActionIdempotencyKey(normalized._id, "requested:none", `manual-${guard.user.id}`),
-            });
-        } catch (error) {
-            const maybeMongoError = error as { code?: number };
-            if (maybeMongoError?.code !== 11000) {
-                throw error;
-            }
-        }
-
         await enqueueOutboxEvent({
             topic: "task.created",
             dedupeKey: `task.created:${normalized._id}`,
@@ -143,22 +98,6 @@ export async function POST(req: NextRequest) {
                     sourceMessageId: normalized.sourceMessageIds[0] ?? null,
                     createdByType: "user",
                 },
-            },
-        });
-
-        await enqueueOutboxEvent({
-            topic: "task.execution.requested",
-            dedupeKey: `task.execution.requested:${normalized._id}:manual-create:none`,
-            payload: {
-                taskId: normalized._id,
-                conversationId: normalized.conversationId,
-                triggerMessageId: normalized._id,
-                requestedByType: "user",
-                requestedById: guard.user.id,
-                actionType: "none",
-                parameters: manualActionParams,
-                confidence: 1,
-                needsApproval: false,
             },
         });
 

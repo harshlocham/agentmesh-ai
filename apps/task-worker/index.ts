@@ -12,7 +12,7 @@ import * as taskModule from "@chat/db/models/Task";
 import { RetryManager } from "./services/retry-manager.js";
 import AgentRunner from "./services/agent-runner.js";
 import { evaluateExecutionPolicy } from "./services/execution-policy.js";
-import { withExecutionLease } from "./services/lease.service.js";
+import { assertExecutionLeaseCompleted, withExecutionLease } from "./services/lease.service.js";
 import { startRetryScheduler } from "./services/retry-scheduler.js";
 import { persistExecutionUpdatePayload } from "./services/execution-event.service.js";
 import { logExecution } from "./services/execution-logger.js";
@@ -1420,8 +1420,9 @@ async function processTaskExecutionRequested(payload: NormalizedTaskExecutionReq
             taskId: payload.taskId,
             conversationId: payload.conversationId,
         });
-        return;
     }
+
+    assertExecutionLeaseCompleted(payload.taskId, leaseResult);
 }
 
 async function processTaskExecutionApproved(payload: TaskExecutionApprovedPayload) {

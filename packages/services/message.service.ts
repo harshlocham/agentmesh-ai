@@ -1,14 +1,14 @@
 'use server';
-import { CreateMessageInput } from "@/lib/validators/message.schema";
+import { CreateMessageInput } from "./validators/message.schema";
 import mongoose, { Types } from "mongoose";
 import { Conversation } from "@chat/db/models/Conversation";
 import Message, { IMessagePopulated } from "@chat/db/models/Message";
-import { assertConversationAccess } from "./authorization.service";
+import { connectToDatabase } from "@chat/db";
 import { enqueueOutboxEvent } from "./outbox.service";
 //import { socket } from "@/lib/socket/socketClient";
 
 export async function createMessage(data: CreateMessageInput, senderId: string) {
-    await assertConversationAccess(senderId, data.conversationId);
+    await connectToDatabase();
 
     const conversationId = new Types.ObjectId(data.conversationId);
     const senderObjectId = new Types.ObjectId(senderId);

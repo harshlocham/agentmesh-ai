@@ -94,6 +94,22 @@ export async function acquireExecutionLease(args: {
 
 export type WithExecutionLeaseResult<T> = T | { skipped: "lease_busy" };
 
+export class ExecutionLeaseBusyError extends Error {
+    constructor(taskId: string) {
+        super(`Task execution lease busy for task ${taskId}`);
+        this.name = "ExecutionLeaseBusyError";
+    }
+}
+
+export function assertExecutionLeaseCompleted<T>(
+    taskId: string,
+    result: WithExecutionLeaseResult<T>
+): asserts result is T {
+    if (result && typeof result === "object" && "skipped" in result && result.skipped === "lease_busy") {
+        throw new ExecutionLeaseBusyError(taskId);
+    }
+}
+
 export async function withExecutionLease<T>(
     args: { taskId: string; workerId: string; leaseMs?: number; runId?: string },
     fn: (handle: LeaseHandle, abortSignal: AbortSignal) => Promise<T>

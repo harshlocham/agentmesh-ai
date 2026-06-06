@@ -2743,7 +2743,7 @@ Reply to confirm receipt or contact support if you have questions.
     }): string {
         const canonical = this.stableStringify(args.params ?? {});
         return createHash("sha256")
-            .update(`${args.taskId}|${args.runId}|${args.stepId ?? "default"}|${args.toolName}|${canonical}`)
+            .update(`${args.taskId}|${args.stepId ?? "default"}|${args.toolName}|${canonical}`)
             .digest("hex")
             .slice(0, 64);
     }
