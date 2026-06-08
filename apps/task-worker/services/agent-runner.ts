@@ -1336,7 +1336,6 @@ Reply to confirm receipt or contact support if you have questions.
 
                     const toolIdempotencyKey = this.buildToolIdempotencyKey({
                         taskId,
-                        runId: this.getCurrentRunId(),
                         stepId: context.action.toolName,
                         toolName: context.attemptPayload.toolName,
                         params: context.attemptPayload.parameters,
@@ -2299,7 +2298,6 @@ Reply to confirm receipt or contact support if you have questions.
                     const attemptNumber = (step.attempts ?? 0) + 1;
                     const idempotencyKey = this.buildToolIdempotencyKey({
                         taskId,
-                        runId: this.getCurrentRunId(),
                         stepId: step.stepId,
                         toolName: activeToolName,
                         params: activeNormalizedInput,
@@ -2425,7 +2423,6 @@ Reply to confirm receipt or contact support if you have questions.
                                             parameters: activeNormalizedInput,
                                             idempotencyKey: this.buildToolIdempotencyKey({
                                                 taskId,
-                                                runId: this.getCurrentRunId(),
                                                 stepId: step.stepId,
                                                 toolName: activeToolName,
                                                 params: activeNormalizedInput,
@@ -2734,9 +2731,9 @@ Reply to confirm receipt or contact support if you have questions.
             .join(",")}}`;
     }
 
+    // Intentionally run-independent so tool calls stay idempotent across lease handoffs.
     private buildToolIdempotencyKey(args: {
         taskId: string;
-        runId: string;
         stepId: string | null;
         toolName: string;
         params: unknown;

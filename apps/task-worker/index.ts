@@ -5,14 +5,14 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { TaskExecutionActionType, TaskExecutionUpdatedPayload, TaskResult, TaskUpdatedPayload } from "@chat/types";
-import { claimOutboxEvents, markOutboxEventCompleted, markOutboxEventDeadLetter, markOutboxEventFailed } from "@chat/services/outbox.service";
+import { claimOutboxEvents, markOutboxEventCompleted, markOutboxEventDeadLetter, markOutboxEventDeferred, markOutboxEventFailed } from "@chat/services/outbox.service";
 import { processMessageTaskIntelligence as processMessageTaskIntelligenceFromService } from "@chat/services/task-intelligence.service";
 import * as taskRepo from "@chat/services/repositories/task.repo";
 import * as taskModule from "@chat/db/models/Task";
 import { RetryManager } from "./services/retry-manager.js";
 import AgentRunner from "./services/agent-runner.js";
 import { evaluateExecutionPolicy } from "./services/execution-policy.js";
-import { assertExecutionLeaseCompleted, withExecutionLease } from "./services/lease.service.js";
+import { assertExecutionLeaseCompleted, ExecutionLeaseBusyError, withExecutionLease } from "./services/lease.service.js";
 import { startRetryScheduler } from "./services/retry-scheduler.js";
 import { persistExecutionUpdatePayload } from "./services/execution-event.service.js";
 import { logExecution } from "./services/execution-logger.js";
@@ -299,6 +299,7 @@ function getOutboxFns() {
         claim: claimOutboxEvents,
         complete: markOutboxEventCompleted,
         fail: markOutboxEventFailed,
+        defer: markOutboxEventDeferred,
         deadLetter: markOutboxEventDeadLetter,
     };
 }
@@ -1601,7 +1602,7 @@ async function processOneEvent(event: {
 }
 
 async function run() {
-    const { claim, fail, deadLetter } = getOutboxFns();
+    const { claim, fail, defer, deadLetter } = getOutboxFns();
 
     if (!process.env.MONGODB_URI) {
         console.warn("task-worker disabled: MONGODB_URI is not set. Set MONGODB_URI to enable task processing.");
@@ -1636,6 +1637,18 @@ async function run() {
             } catch (error) {
                 const message = error instanceof Error ? error.message : "Outbox worker failure";
                 const eventId = event._id.toString();
+
+                if (error instanceof ExecutionLeaseBusyError) {
+                    await defer(eventId, message, computeRetryDelay(0));
+                    logExecution("info", {
+                        event: "lease.busy.deferred",
+                        workerId: WORKER_ID,
+                        eventId,
+                        topic: event.topic,
+                    });
+                    continue;
+                }
+
                 if (event.attempts >= OUTBOX_MAX_ATTEMPTS) {
                     await deadLetter(eventId, message);
                 } else {

@@ -101,6 +101,24 @@ export async function markOutboxEventFailed(id: string, errorMessage: string, re
     );
 }
 
+export async function markOutboxEventDeferred(id: string, reason: string, delayMs = 1000) {
+    await connectToDatabase();
+    await OutboxEventModel.updateOne(
+        { _id: id },
+        {
+            $set: {
+                status: "failed",
+                availableAt: new Date(Date.now() + delayMs),
+                deadLetteredAt: null,
+                lockedBy: null,
+                lockedAt: null,
+                lastError: reason.slice(0, 4000),
+            },
+            $inc: { attempts: -1 },
+        }
+    );
+}
+
 export async function markOutboxEventDeadLetter(id: string, errorMessage: string) {
     await connectToDatabase();
     await OutboxEventModel.updateOne(
