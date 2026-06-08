@@ -5,7 +5,6 @@ import test from "node:test";
 
 function buildToolIdempotencyKey(args: {
     taskId: string;
-    runId: string;
     stepId: string | null;
     toolName: string;
     params: unknown;
@@ -20,7 +19,6 @@ function buildToolIdempotencyKey(args: {
 test("idempotency key is stable for same task/step/tool/params", () => {
     const input = {
         taskId: "task-1",
-        runId: "run-1",
         stepId: "step-a",
         toolName: "send_email",
         params: { to: "a@example.com", subject: "Hello" },
@@ -32,16 +30,16 @@ test("idempotency key is stable for same task/step/tool/params", () => {
     assert.equal(first, second);
 });
 
-test("idempotency key survives runId changes after rerun or lease steal", () => {
-    const base = {
+test("idempotency key is run-independent for lease handoff idempotency", () => {
+    const input = {
         taskId: "task-1",
         stepId: "step-a",
         toolName: "send_email",
         params: { to: "a@example.com", subject: "Hello" },
     };
 
-    const firstRun = buildToolIdempotencyKey({ ...base, runId: "run-1" });
-    const stolenRun = buildToolIdempotencyKey({ ...base, runId: "run-2" });
+    const firstRun = buildToolIdempotencyKey(input);
+    const stolenRun = buildToolIdempotencyKey(input);
 
     assert.equal(firstRun, stolenRun);
 });
@@ -49,7 +47,6 @@ test("idempotency key survives runId changes after rerun or lease steal", () => 
 test("idempotency key changes when params change", () => {
     const base = {
         taskId: "task-1",
-        runId: "run-1",
         stepId: "step-a",
         toolName: "send_email",
     };
