@@ -285,8 +285,16 @@ jobs:
     timeout-minutes: 30
     needs: prepare
     if: needs.prepare.outputs.should_deploy == 'true'
+    # Job-scoped permissions (override the broader workflow grant): only what is
+    # needed to push and to mint a keyless cosign signature via GitHub OIDC.
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
     outputs:
       should_build: ${{ steps.image_guard.outputs.should_build }}
+      image_digest: ${{ steps.digest.outputs.image_digest }}
+      deploy_ref: ${{ steps.digest.outputs.deploy_ref }}
 
     steps:
       - name: Checkout release commit
@@ -321,6 +329,7 @@ jobs:
 
       - name: Build and push immutable image tags
         if: steps.image_guard.outputs.should_build == 'true'
+        id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
@@ -335,7 +344,10 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ needs.prepare.outputs.release_sha }}
             org.opencontainers.image.version=${{ needs.prepare.outputs.release_version }}
-          provenance: false
+          # Attach full SLSA provenance and an SBOM attestation to the image so the
+          # shipped artifact is independently verifiable (reverses provenance: false).
+          provenance: mode=max
+          sbom: true
 
       - name: Publish immutable compatibility aliases for legacy image name
         # Mirror only the immutable aliases. The moving legacy "latest" alias is
@@ -348,12 +360,46 @@ jobs:
             -t "${{ needs.prepare.outputs.legacy_sha_tag }}" \
             "${{ needs.prepare.outputs.version_tag }}"
 
+      - name: Resolve image digest for deployment
+        id: digest
+        # Produce a single immutable digest reference that every downstream job
+        # (staging, production, promote) deploys, so the exact bytes built here are
+        # what ships everywhere instead of re-resolving a tag at each stage.
+        run: |
+          set -euo pipefail
+          IMAGE="${{ needs.prepare.outputs.image }}"
+          if [[ "${{ steps.image_guard.outputs.should_build }}" == "true" ]]; then
+            DIGEST="${{ steps.build.outputs.digest }}"
+          else
+            DIGEST="$(docker buildx imagetools inspect "${{ needs.prepare.outputs.version_tag }}" --format '{{.Manifest.Digest}}')"
+          fi
+
+          if [[ "$DIGEST" != sha256:* ]]; then
+            echo "::error::Could not resolve a valid image digest (got '${DIGEST:-<empty>}')."
+            exit 1
+          fi
+
+          echo "image_digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "deploy_ref=${IMAGE}@${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "Deploying by immutable digest: ${IMAGE}@${DIGEST}"
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
+
+      - name: Sign image by digest (keyless)
+        env:
+          DEPLOY_REF: ${{ steps.digest.outputs.deploy_ref }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "$DEPLOY_REF"
+
       - name: Print published image refs
         run: |
           set -euxo pipefail
           echo "Published immutable tag: ${{ needs.prepare.outputs.version_tag }}"
           echo "Published commit tag:    ${{ needs.prepare.outputs.sha_tag }}"
           echo "Published legacy tag:    ${{ needs.prepare.outputs.legacy_version_tag }}"
+          echo "Deploy digest:           ${{ steps.digest.outputs.deploy_ref }}"
           echo "Moving 'latest' tags are advanced after a successful deploy."
 
   deploy_staging:
@@ -429,7 +475,7 @@ jobs:
         if: steps.staging_guard.outputs.already_deployed != 'true'
         run: |
           set -euxo pipefail
-          echo "Deploying ${{ needs.prepare.outputs.version_tag }} to staging"
+          echo "Deploying ${{ needs.build_image.outputs.deploy_ref }} (${{ needs.prepare.outputs.release_tag }}) to staging"
 
       - name: Health check staging
         if: steps.staging_guard.outputs.already_deployed != 'true'
@@ -556,7 +602,7 @@ jobs:
         if: steps.production_guard.outputs.already_deployed != 'true'
         run: |
           set -euxo pipefail
-          echo "Deploying ${{ needs.prepare.outputs.version_tag }} to production"
+          echo "Deploying ${{ needs.build_image.outputs.deploy_ref }} (${{ needs.prepare.outputs.release_tag }}) to production"
 
       - name: Health check production
         if: steps.production_guard.outputs.already_deployed != 'true'
@@ -664,6 +710,7 @@ jobs:
           set -euxo pipefail
           RELEASE_TAG="${{ needs.prepare.outputs.release_tag }}"
           VERSION_TAG="${{ needs.prepare.outputs.version_tag }}"
+          DEPLOY_REF="${{ needs.build_image.outputs.deploy_ref }}"
           LATEST_TAG="${{ needs.prepare.outputs.latest_tag }}"
           LEGACY_LATEST_TAG="${{ needs.prepare.outputs.legacy_latest_tag }}"
 
@@ -684,12 +731,12 @@ jobs:
             exit 0
           fi
 
-          docker buildx imagetools create -t "$LATEST_TAG" "$VERSION_TAG"
-          docker buildx imagetools create -t "$LEGACY_LATEST_TAG" "$VERSION_TAG"
+          docker buildx imagetools create -t "$LATEST_TAG" "$DEPLOY_REF"
+          docker buildx imagetools create -t "$LEGACY_LATEST_TAG" "$DEPLOY_REF"
 
-          echo "Advanced moving tags to $RELEASE_TAG:"
-          echo "  $LATEST_TAG -> $VERSION_TAG"
-          echo "  $LEGACY_LATEST_TAG -> $VERSION_TAG"
+          echo "Advanced moving tags to $RELEASE_TAG ($DEPLOY_REF):"
+          echo "  $LATEST_TAG -> $DEPLOY_REF"
+          echo "  $LEGACY_LATEST_TAG -> $DEPLOY_REF"
 
   notify_release:
     name: Notify Release Metadata
