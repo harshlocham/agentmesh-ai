@@ -476,6 +476,7 @@ jobs:
     if: >
       always() &&
       needs.prepare.outputs.should_deploy == 'true' &&
+      needs.build_image.result == 'success' &&
       (
         needs.prepare.outputs.target == 'production' ||
         (
