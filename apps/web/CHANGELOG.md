@@ -1,5 +1,21 @@
 # @chat/web
 
+## 4.0.5
+
+### Patch Changes
+
+- 4a29cb5: Enhance execution lease management and task processing.
+  - Added execution lease validation before task processing begins.
+  - Improved handling of lease contention with a dedicated execution lease busy error.
+  - Refined task action ID generation for more consistent task tracking.
+  - Cleaned up task-related API code and removed unused imports.
+
+- Updated dependencies [9040db3]
+- Updated dependencies [072fafc]
+- Updated dependencies [4a29cb5]
+  - @chat/auth@2.3.3
+  - @chat/services@2.0.3
+
 ## 4.0.4
 
 ### Patch Changes

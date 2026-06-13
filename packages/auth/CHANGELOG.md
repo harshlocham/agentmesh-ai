@@ -1,5 +1,14 @@
 # @chat/auth
 
+## 2.3.3
+
+### Patch Changes
+
+- 9040db3: - Added markSessionStepUpPending function to manage session state during step-up authentication.
+  - Updated session model to include state field with values "active" and "step_up_pending".
+  - Modified refresh and step-up services to handle session state transitions appropriately.
+  - Ensured session state is restored to "active" upon successful token rotation.
+
 ## 2.3.2
 
 ### Patch Changes
@@ -29,7 +38,6 @@
 ### Minor Changes
 
 - 3215a80: Enhanced mobile authentication and chat session management, and standardized monorepo build tooling across shared packages.
-
   - Added mobile auth support improvements and session flow hardening.
   - Added explicit build scripts/config for shared packages (auth, db, services, redis, types) to emit dist artifacts consistently.
   - Improved repository cleanup scripts with safer artifact cleanup and full-reset options.
@@ -40,7 +48,6 @@
 ### Patch Changes
 
 - 86f8cfe: Refactor CI/CD to use Changesets-native package tags for deployment
-
   - Removed root `v*` tag creation logic from release workflow
   - Updated deploy workflow to trigger on Changesets tags (`@chat/services@*`)
   - Implemented strict tag parsing and validation
@@ -53,7 +60,6 @@
 ### Patch Changes
 
 - 86f8cfe: Fix release workflow to create root version tags for deploy trigger
-
   - **release.yml**: Add step to create root repository version tag (v\*) based on highest package version
   - **deploy.yml compatibility**: Root v\* tags now enable proper deployment workflow triggering
   - This resolves the issue where release workflow created only package-scoped tags but deploy workflow needed root tags
@@ -63,7 +69,6 @@
 ### Patch Changes
 
 - 3b307d2: Fix CI/CD release and deployment pipeline configuration
-
   - **release.yml**: Fix publish step to actually create git tags using `npx changeset tag` instead of echo fallback
   - **release.yml**: Add robust token fallback (`CHANGESETS_GITHUB_TOKEN || GITHUB_TOKEN`) for private repo releases
   - **deploy.yml**: Relax actor gate to allow repository owner to trigger deployments from token-based releases
@@ -77,7 +82,6 @@
 ### Major Changes
 
 - c5b8b6c: Migrate authentication to JWT with stronger session controls and security hardening.
-
   - Replace legacy auth flow with access/refresh JWT tokens and server-backed session validation.
   - Add tokenVersion-based global session invalidation for emergency token revocation.
   - Harden login, refresh, logout, and logout-all flows with stricter validation and invalidation behavior.
