@@ -163,6 +163,9 @@ export function registerMessageHandlers(io: IO, socket: Socket, redis: Redis) {
 
                 io.to(conversationRoom(conversationId)).emit(SocketEvents.MESSAGE_NEW, normalizedData);
 
+                // Fallback broadcast for participants who joined conversation room but were not in recipients.
+                io.to(conversationRoom(conversationId)).emit(SocketEvents.MESSAGE_NEW, normalizedData);
+
                 for (const userId of recipients) {
                     io.to(`user:${userId}`).emit(SocketEvents.MESSAGE_NEW, normalizedData);
                 }

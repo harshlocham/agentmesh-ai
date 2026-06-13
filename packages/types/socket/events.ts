@@ -1,11 +1,15 @@
 import type { MessageDTO } from "../dto/message.dto";
 import type {
+    CallAcceptPayload,
     CallAnswerPayload,
     CallEndPayload,
     CallIceCandidatePayload,
+    CallOfferInitPayload,
     CallOfferPayload,
+    CallRejectPayload,
     CallReconnectPayload,
     CallRingingPayload,
+    CallStatePayload,
     ConversationJoinPayload,
     ConversationCreatedPayload,
     ConversationJoinedPayload,
@@ -70,12 +74,16 @@ export const SocketEvents = {
     USER_IDLE: "user:idle",
     USER_ACTIVE: "user:active",
     CALL_OFFER: "call:offer",
+    CALL_OFFER_INIT: "call:offer:init",
     CALL_ANSWER: "call:answer",
     CALL_ICE_CANDIDATE: "call:ice-candidate",
     CALL_RINGING: "call:ringing",
+    CALL_ACCEPT: "call:accept",
+    CALL_REJECT: "call:reject",
     CALL_BUSY: "call:busy",
     CALL_END: "call:end",
     CALL_RECONNECT: "call:reconnect",
+    CALL_STATE: "call:state",
     CONVERSATION_JOIN: "conversation:join",
     CONVERSATION_LEAVE: "conversation:leave",
     CONVERSATION_JOINED: "conversation:joined",
@@ -130,12 +138,16 @@ export interface ServerToClientEvents {
 
     // Call
     [SocketEvents.CALL_OFFER]: (data: CallOfferPayload) => void;
+    [SocketEvents.CALL_OFFER_INIT]: (data: CallOfferInitPayload) => void;
     [SocketEvents.CALL_ANSWER]: (data: CallAnswerPayload) => void;
     [SocketEvents.CALL_ICE_CANDIDATE]: (data: CallIceCandidatePayload) => void;
     [SocketEvents.CALL_RINGING]: (data: CallRingingPayload) => void;
+    [SocketEvents.CALL_ACCEPT]: (data: CallAcceptPayload) => void;
+    [SocketEvents.CALL_REJECT]: (data: CallRejectPayload) => void;
     [SocketEvents.CALL_BUSY]: (data: CallRingingPayload) => void;
     [SocketEvents.CALL_RECONNECT]: (data: CallReconnectPayload) => void;
     [SocketEvents.CALL_END]: (data: CallEndPayload) => void;
+    [SocketEvents.CALL_STATE]: (data: CallStatePayload) => void;
 
     // Conversation
     [SocketEvents.CONVERSATION_JOINED]: (data: ConversationJoinedPayload) => void;
@@ -185,10 +197,14 @@ export interface ClientToServerEvents {
 
     // Calls
     [SocketEvents.CALL_OFFER]: (data: CallOfferPayload) => void;
+    [SocketEvents.CALL_OFFER_INIT]: (data: CallOfferInitPayload) => void;
     [SocketEvents.CALL_ANSWER]: (data: CallAnswerPayload) => void;
     [SocketEvents.CALL_ICE_CANDIDATE]: (data: CallIceCandidatePayload) => void;
+    [SocketEvents.CALL_ACCEPT]: (data: CallAcceptPayload) => void;
+    [SocketEvents.CALL_REJECT]: (data: CallRejectPayload) => void;
     [SocketEvents.CALL_END]: (data: CallEndPayload) => void;
     [SocketEvents.CALL_BUSY]: (data: CallRingingPayload) => void;
+    [SocketEvents.CALL_RECONNECT]: (data: CallReconnectPayload) => void;
 
     // Conversation
     [SocketEvents.CONVERSATION_JOIN]: (data: ConversationJoinPayload) => void;

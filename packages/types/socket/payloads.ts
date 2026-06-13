@@ -138,38 +138,115 @@ export interface PresencePingPayload {
     at?: Date | string;
 }
 
+export type CallType = "video" | "audio";
+
+export type CallState =
+    | "initiated"
+    | "ringing"
+    | "accepted"
+    | "active"
+    | "reconnecting"
+    | "ended"
+    | "rejected"
+    | "missed"
+    | "failed";
+
+export type CallEndReason = "hangup" | "disconnect" | "error";
+
+export type CallRejectReason = "declined" | "busy" | "timeout";
+
+export interface CallParticipant {
+    userId: string;
+    deviceId?: string;
+    acceptedAt?: Date | string;
+}
+
+export interface CallOfferInitPayload {
+    callId: string;
+    conversationId: string;
+    from: string;
+    to: string;
+    callType: CallType;
+    clientTs?: Date | string;
+    deviceId?: string;
+}
+
 export interface CallOfferPayload {
+    callId?: string;
     from: string;
     to: string;
     conversationId?: string;
     offer: RTCSessionDescriptionInit;
+    sdpRevision?: number;
+    deviceId?: string;
 }
 
 export interface CallAnswerPayload {
+    callId?: string;
     from: string;
     to: string;
     answer: RTCSessionDescriptionInit;
+    sdpRevision?: number;
+    deviceId?: string;
 }
 
 export interface CallIceCandidatePayload {
+    callId?: string;
     from: string;
     to: string;
     candidate: RTCIceCandidateInit;
+    candidateSeq?: number;
+    mid?: string | null;
+    mLineIndex?: number | null;
 }
 
 export interface CallRingingPayload {
+    callId?: string;
+    conversationId?: string;
     from: string;
     to: string;
+    expiresAt?: Date | string;
+}
+
+export interface CallAcceptPayload {
+    callId: string;
+    conversationId: string;
+    from: string;
+    to: string;
+    acceptedAt?: Date | string;
+    deviceId?: string;
+}
+
+export interface CallRejectPayload {
+    callId: string;
+    conversationId: string;
+    from: string;
+    to: string;
+    reason: CallRejectReason;
 }
 
 export interface CallEndPayload {
+    callId?: string;
     from: string;
     to: string;
+    reason?: CallEndReason;
+    endedAt?: Date | string;
 }
 
 export interface CallReconnectPayload {
+    callId?: string;
     from: string;
     to: string;
+    lastSeenSeq?: number;
+    iceRestartRequired?: boolean;
+}
+
+export interface CallStatePayload {
+    callId: string;
+    conversationId?: string;
+    status: CallState;
+    participants: CallParticipant[];
+    serverTs: Date | string;
 }
 
 export interface ConversationJoinPayload {

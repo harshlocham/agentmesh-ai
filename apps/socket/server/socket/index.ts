@@ -8,6 +8,7 @@ import { presenceHandler } from "./handlers/presence/presence.handler.js";
 import { registerMessageHandlers } from "./handlers/message/message.handler.js";
 import { deliveredHandler } from "./handlers/delivery/delivered.handler.js";
 import { SeenHandler } from "./handlers/delivery/seen.handler.js";
+import { callHandler } from "./handlers/call/call.handler.js";
 import { cleanupStaleActiveUsers } from "./services/presence.redis.service.js";
 import { SocketEvents } from "@chat/types";
 
@@ -54,6 +55,7 @@ export async function initSocket(server: HTTPServer) {
         registerMessageHandlers(io, socket, redis.appClient);
         deliveredHandler(io, socket, redis.appClient);
         SeenHandler(io, socket, redis.appClient);
+        callHandler(io, socket);
         typingHandler(io, socket);
         messageEditHandler(io, socket);
         DeleteHandler(io, socket);

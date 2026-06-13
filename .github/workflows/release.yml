@@ -34,7 +34,7 @@ jobs:
         run: corepack enable
 
       - name: Setup Node.js 22 with pnpm cache
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
@@ -57,14 +57,14 @@ jobs:
 
       - name: Version with Changesets
         id: changesets
-        uses: changesets/action@v1
+        uses: changesets/action@6a0a831ff30acef54f2c6aa1cbbc1096b066edaf # v1.7.0
         with:
           version: pnpm run version-packages
           publish: echo "skip publish"
           createGithubReleases: false
           setupGitUser: true
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.CHANGESETS_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Create Git Tag
         id: create_tag
@@ -97,7 +97,7 @@ jobs:
           fi
 
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-      
+
       - name: Resolve release metadata
         id: metadata
         run: |
