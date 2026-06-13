@@ -1,5 +1,24 @@
 # @chat/task-worker
 
+## 2.0.6
+
+### Patch Changes
+
+- 072fafc: - Introduced markOutboxEventDeferred function to handle event deferral in case of execution lease conflicts.
+  - Updated task processing logic to defer events when an ExecutionLeaseBusyError occurs.
+  - Enhanced outbox function retrieval to include the new defer functionality.
+  - Removed unnecessary runId references in agent-runner for improved idempotency.
+  - Added tests to verify the behavior of event deferral and its impact on claim attempts.
+- 4a29cb5: Enhance execution lease management and task processing.
+  - Added execution lease validation before task processing begins.
+  - Improved handling of lease contention with a dedicated execution lease busy error.
+  - Refined task action ID generation for more consistent task tracking.
+  - Cleaned up task-related API code and removed unused imports.
+
+- Updated dependencies [072fafc]
+- Updated dependencies [4a29cb5]
+  - @chat/services@2.0.3
+
 ## 2.0.5
 
 ### Patch Changes

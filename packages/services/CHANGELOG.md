@@ -1,5 +1,20 @@
 # @chat/services
 
+## 2.0.3
+
+### Patch Changes
+
+- 072fafc: - Introduced markOutboxEventDeferred function to handle event deferral in case of execution lease conflicts.
+  - Updated task processing logic to defer events when an ExecutionLeaseBusyError occurs.
+  - Enhanced outbox function retrieval to include the new defer functionality.
+  - Removed unnecessary runId references in agent-runner for improved idempotency.
+  - Added tests to verify the behavior of event deferral and its impact on claim attempts.
+- 4a29cb5: Enhance execution lease management and task processing.
+  - Added execution lease validation before task processing begins.
+  - Improved handling of lease contention with a dedicated execution lease busy error.
+  - Refined task action ID generation for more consistent task tracking.
+  - Cleaned up task-related API code and removed unused imports.
+
 ## 2.0.2
 
 ### Patch Changes
@@ -34,7 +49,6 @@
 ### Minor Changes
 
 - 3215a80: Enhanced mobile authentication and chat session management, and standardized monorepo build tooling across shared packages.
-
   - Added mobile auth support improvements and session flow hardening.
   - Added explicit build scripts/config for shared packages (auth, db, services, redis, types) to emit dist artifacts consistently.
   - Improved repository cleanup scripts with safer artifact cleanup and full-reset options.
@@ -50,7 +64,6 @@
 ### Patch Changes
 
 - 86f8cfe: Refactor CI/CD to use Changesets-native package tags for deployment
-
   - Removed root `v*` tag creation logic from release workflow
   - Updated deploy workflow to trigger on Changesets tags (`@chat/services@*`)
   - Implemented strict tag parsing and validation
@@ -66,7 +79,6 @@
 ### Patch Changes
 
 - 86f8cfe: Fix release workflow to create root version tags for deploy trigger
-
   - **release.yml**: Add step to create root repository version tag (v\*) based on highest package version
   - **deploy.yml compatibility**: Root v\* tags now enable proper deployment workflow triggering
   - This resolves the issue where release workflow created only package-scoped tags but deploy workflow needed root tags
@@ -79,7 +91,6 @@
 ### Patch Changes
 
 - 3b307d2: Fix CI/CD release and deployment pipeline configuration
-
   - **release.yml**: Fix publish step to actually create git tags using `npx changeset tag` instead of echo fallback
   - **release.yml**: Add robust token fallback (`CHANGESETS_GITHUB_TOKEN || GITHUB_TOKEN`) for private repo releases
   - **deploy.yml**: Relax actor gate to allow repository owner to trigger deployments from token-based releases
