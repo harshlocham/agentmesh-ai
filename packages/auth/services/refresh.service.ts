@@ -24,6 +24,34 @@ export const refreshService = async ({
 }) => {
     const { payload, session } = await verifySession(refreshToken);
 
+    const user = await User.findById(payload.sub)
+        .select("_id role status tokenVersion isDeleted")
+        .lean<{
+            _id: { toString(): string };
+            role?: "user" | "moderator" | "admin";
+            status?: string;
+            tokenVersion?: number;
+            isDeleted?: boolean;
+        } | null>();
+
+    if (!user) {
+        throw new Error("User not found");
+    }
+
+    if (user.isDeleted) {
+        throw new Error("ACCOUNT_DELETED");
+    }
+
+    if (user.status && user.status !== "active") {
+        throw new Error("Account is not active");
+    }
+
+    const currentTokenVersion = user.tokenVersion || 0;
+    if (payload.tokenVersion !== currentTokenVersion) {
+        await revokeSession(payload.sessionId);
+        throw new Error("Token version revoked");
+    }
+
     const incomingDeviceFingerprint = generateDeviceFingerprint({
         deviceId,
         userAgent,
@@ -57,24 +85,6 @@ export const refreshService = async ({
             challenge._id.toString(),
             payload.sub
         );
-    }
-
-    const user = await User.findById(payload.sub)
-        .select("_id role status tokenVersion")
-        .lean<{ _id: { toString(): string }; role?: "user" | "moderator" | "admin"; status?: string; tokenVersion?: number } | null>();
-
-    if (!user) {
-        throw new Error("User not found");
-    }
-
-    if (user.status && user.status !== "active") {
-        throw new Error("Account is not active");
-    }
-
-    const currentTokenVersion = user.tokenVersion || 0;
-    if (payload.tokenVersion !== currentTokenVersion) {
-        await revokeSession(payload.sessionId);
-        throw new Error("Token version revoked");
     }
 
     const nextRefreshToken = generateRefreshToken({

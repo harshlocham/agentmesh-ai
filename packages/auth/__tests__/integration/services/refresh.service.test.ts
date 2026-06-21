@@ -167,15 +167,12 @@ describe("services/refresh.service (db integration)", () => {
             ).rejects.toThrow("Account is not active");
         });
 
-        it("FINDING: a soft-deleted user (isDeleted=true, status=active) can still refresh (req 8)", async () => {
-            const { ctx, issued, userId } = await setupRefreshable({ isDeleted: true });
+        it("rejects when the user account is soft-deleted (req 8)", async () => {
+            const { ctx, issued } = await setupRefreshable({ isDeleted: true });
 
-            // refreshService only checks `status`, never `isDeleted`, so a
-            // soft-deleted account is still granted fresh tokens.
-            const result = await refreshService({ refreshToken: issued.refreshToken, ...ctx });
-
-            expect(result.userId).toBe(userId);
-            expect(verifyAccessToken(result.accessToken).sub).toBe(userId);
+            await expect(
+                refreshService({ refreshToken: issued.refreshToken, ...ctx })
+            ).rejects.toThrow("ACCOUNT_DELETED");
         });
     });
 
@@ -401,24 +398,42 @@ describe("services/refresh.service (db integration)", () => {
             expect(a).toBe(b);
         });
 
-        it("FINDING: fingerprint/step-up runs before user checks, so a banned user's drift still creates a challenge", async () => {
+        it("does not create step-up challenges for invalid users before account checks", async () => {
             const { ctx, issued, userId } = await setupRefreshable({ status: "banned" });
 
-            const error = await refreshService({
-                refreshToken: issued.refreshToken,
-                ...driftedContext(ctx),
-            }).catch((e: unknown) => e);
+            await expect(
+                refreshService({
+                    refreshToken: issued.refreshToken,
+                    ...driftedContext(ctx),
+                })
+            ).rejects.toThrow("Account is not active");
 
-            // The account is banned, yet a step-up challenge + session mutation
-            // happen before the status check is ever reached.
-            expect(error).toBeInstanceOf(AuthStepUpRequiredError);
             expect(
                 await StepUpChallenge.countDocuments({
                     userId: new Types.ObjectId(userId),
                 })
-            ).toBe(1);
+            ).toBe(0);
             const session = await SessionModel.findById(issued.sessionId);
-            expect(session?.state).toBe("step_up_pending");
+            expect(session?.state).toBe("active");
+        });
+
+        it("does not create step-up challenges for soft-deleted users with fingerprint drift", async () => {
+            const { ctx, issued, userId } = await setupRefreshable({ isDeleted: true });
+
+            await expect(
+                refreshService({
+                    refreshToken: issued.refreshToken,
+                    ...driftedContext(ctx),
+                })
+            ).rejects.toThrow("ACCOUNT_DELETED");
+
+            expect(
+                await StepUpChallenge.countDocuments({
+                    userId: new Types.ObjectId(userId),
+                })
+            ).toBe(0);
+            const session = await SessionModel.findById(issued.sessionId);
+            expect(session?.state).toBe("active");
         });
     });
 });

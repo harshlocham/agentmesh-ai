@@ -86,6 +86,7 @@ type MockUserLeanResult = {
     role?: "user" | "moderator" | "admin";
     status?: "active" | "banned";
     tokenVersion?: number;
+    isDeleted?: boolean;
 } | null;
 
 function mockUserFindByIdResult(result: MockUserLeanResult) {
@@ -169,6 +170,13 @@ describe("step-up authentication integration flow", () => {
         validateSessionFingerprintMock.mockReturnValue({
             requiresStepUp: true,
             reasons: ["user_agent_mismatch"],
+        });
+
+        mockUserFindByIdResult({
+            _id: { toString: () => "user-2" },
+            role: "user",
+            status: "active",
+            tokenVersion: 0,
         });
 
         createChallengeMock.mockResolvedValue({
