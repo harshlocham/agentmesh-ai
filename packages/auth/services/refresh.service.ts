@@ -9,7 +9,7 @@ import {
 import { generateDeviceFingerprint, validateSessionFingerprint } from "../session/fingerprint";
 import { AuthStepUpRequiredError } from "../errors/auth-errors";
 import { User } from "@/models/User";
-import { createChallenge } from "@/models/StepUpChallenge";
+import { createChallenge, StepUpChallenge } from "@/models/StepUpChallenge";
 
 export const refreshService = async ({
     refreshToken,
@@ -70,6 +70,32 @@ export const refreshService = async ({
             ipAddress,
         },
     });
+
+    if (session.state === "step_up_pending") {
+        const existingChallenge = await StepUpChallenge.findOne({
+            userId: payload.sub,
+            status: "pending",
+            expiresAt: { $gt: new Date() },
+        })
+            .sort({ createdAt: -1 })
+            .select("_id")
+            .lean<{ _id: { toString(): string } } | null>();
+
+        const challengeId = existingChallenge
+            ? existingChallenge._id.toString()
+            : (
+                  await createChallenge(payload.sub, {
+                      ip: ipAddress,
+                      userAgent,
+                  })
+              )._id.toString();
+
+        throw new AuthStepUpRequiredError(
+            fingerprint.requiresStepUp ? fingerprint.reasons : [],
+            challengeId,
+            payload.sub
+        );
+    }
 
     if (fingerprint.requiresStepUp) {
         const challenge = await createChallenge(payload.sub, {

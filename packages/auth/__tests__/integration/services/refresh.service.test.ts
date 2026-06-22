@@ -297,6 +297,29 @@ describe("services/refresh.service (db integration)", () => {
             const { payload } = await verifySession(issued.refreshToken);
             expect(payload.sessionId).toBe(issued.sessionId);
         });
+
+        it("keeps step-up pending when refresh is retried with a matching fingerprint (req 17b)", async () => {
+            const { ctx, issued } = await setupRefreshable();
+
+            const firstError = (await refreshService({
+                refreshToken: issued.refreshToken,
+                ...driftedContext(ctx),
+            }).catch((e: unknown) => e)) as AuthStepUpRequiredError;
+
+            expect(firstError).toBeInstanceOf(AuthStepUpRequiredError);
+
+            const retry = await refreshService({
+                refreshToken: issued.refreshToken,
+                ...ctx,
+            }).catch((e: unknown) => e);
+
+            expect(retry).toBeInstanceOf(AuthStepUpRequiredError);
+            expect((retry as AuthStepUpRequiredError).challengeId).toBe(firstError.challengeId);
+
+            const session = await findSessionById(issued.sessionId);
+            expect(session?.state).toBe("step_up_pending");
+            await expect(verifySession(issued.refreshToken)).resolves.toBeDefined();
+        });
     });
 
     describe("security", () => {

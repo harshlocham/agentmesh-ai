@@ -2,6 +2,8 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { resetAuthBootstrap } from "@/lib/auth/authBootstrap";
+import { useUser } from "@/context/UserContext";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 
@@ -17,12 +19,16 @@ type ChallengeResponse = {
     reason?: string;
 };
 
+/** Survives Strict Mode remounts and HMR — one auto-send per challenge per tab session. */
+const autoOtpSendStarted = new Set<string>();
+
 export default function ChallengeForm({
     challengeId,
     nextPath,
     initialVerificationMethod = "password",
 }: ChallengeFormProps) {
     const router = useRouter();
+    const { refreshUser } = useUser();
     const [password, setPassword] = useState("");
     const [otp, setOtp] = useState("");
     const [loading, setLoading] = useState(false);
@@ -43,7 +49,7 @@ export default function ChallengeForm({
         [challengeId, otp, otpSent, otpLoading]
     );
 
-    const sendOtpCode = useCallback(async () => {
+    const sendOtpCode = useCallback(async (options?: { manual?: boolean }) => {
         if (!challengeId) {
             setError("Challenge is missing. Please refresh and try again.");
             return false;
@@ -51,11 +57,14 @@ export default function ChallengeForm({
 
         setOtpSending(true);
         setError(null);
-        setOtpNotice(null);
+        if (!options?.manual) {
+            setOtpNotice(null);
+        }
 
         try {
             const response = await fetch("/api/auth/challenge/otp/send", {
                 method: "POST",
+                credentials: "include",
                 headers: {
                     "Content-Type": "application/json",
                 },
@@ -66,7 +75,11 @@ export default function ChallengeForm({
 
             const payload = (await response.json().catch(() => null)) as ChallengeResponse | null;
             if (!response.ok || !payload?.success) {
-                setError(payload?.reason || payload?.error || "Unable to send OTP. Please try again.");
+                if (response.status === 429) {
+                    setError("Too many code requests. Wait a minute, then use Resend code.");
+                } else {
+                    setError(payload?.reason || payload?.error || "Unable to send OTP. Please try again.");
+                }
                 return false;
             }
 
@@ -82,12 +95,17 @@ export default function ChallengeForm({
     }, [challengeId]);
 
     useEffect(() => {
-        if (!isOtpOnly || otpSent || otpSending || otpLoading || !challengeId) {
+        if (!isOtpOnly || !challengeId || otpSent) {
             return;
         }
 
+        if (autoOtpSendStarted.has(challengeId)) {
+            return;
+        }
+
+        autoOtpSendStarted.add(challengeId);
         void sendOtpCode();
-    }, [challengeId, isOtpOnly, otpLoading, otpSent, otpSending, sendOtpCode]);
+    }, [challengeId, isOtpOnly, otpSent, sendOtpCode]);
 
     async function onPasswordSubmit(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
@@ -126,6 +144,8 @@ export default function ChallengeForm({
                 return;
             }
 
+            resetAuthBootstrap();
+            await refreshUser();
             router.replace(nextPath || "/dashboard");
         } catch {
             setError("Unable to verify right now. Please try again.");
@@ -163,6 +183,8 @@ export default function ChallengeForm({
                 return;
             }
 
+            resetAuthBootstrap();
+            await refreshUser();
             router.replace(nextPath || "/dashboard");
         } catch {
             setError("Unable to verify right now. Please try again.");
@@ -211,7 +233,7 @@ export default function ChallengeForm({
                     className="w-full"
                     type="button"
                     variant="secondary"
-                    onClick={sendOtpCode}
+                    onClick={() => void sendOtpCode({ manual: true })}
                     disabled={otpSending || loading || otpLoading || !challengeId}
                 >
                     {otpSending ? "Sending code..." : otpSent ? "Resend code" : "Send code"}

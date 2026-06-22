@@ -3,24 +3,17 @@
 
 import { ClientUser } from "@chat/types";
 import { createContext, useContext, useMemo, useEffect, useRef, useState } from "react";
-import { parseAuthPayload, isStepUpResponse, redirectToStepUpChallenge } from "@/lib/utils/auth/client-session";
+import { isAuthSessionPendingError, isPublicAuthRoute } from "@/lib/utils/auth/client-session";
 import { recordApiTiming } from "@/lib/utils/performance";
 import { getMe } from "@/lib/utils/api";
-import { ensureAuthReady } from "@/lib/auth/authBootstrap";
-
-type MeErrorPayload = {
-    error?: string;
-    code?: string;
-    requiresReauth?: boolean;
-    challengeId?: string;
-};
-
-function wait(ms: number) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-}
+import { ensureAuthReady, isAuthenticated } from "@/lib/auth/authBootstrap";
 
 async function fetchCurrentUser(signal?: AbortSignal): Promise<ClientUser | null> {
     const startedAt = performance.now();
+
+    if (typeof window !== "undefined" && isPublicAuthRoute(window.location.pathname)) {
+        return null;
+    }
 
     // Ensure auth bootstrap runs first
     try {
@@ -29,12 +22,19 @@ async function fetchCurrentUser(signal?: AbortSignal): Promise<ClientUser | null
         console.warn("UserContext: ensureAuthReady failed", err);
     }
 
+    if (!isAuthenticated) {
+        return null;
+    }
+
     try {
         const user = await getMe();
         recordApiTiming("/api/me", performance.now() - startedAt);
         return user || null;
     } catch (err) {
         recordApiTiming("/api/me", performance.now() - startedAt);
+        if (isAuthSessionPendingError(err)) {
+            return null;
+        }
         console.error("Failed to load current user", err);
         return null;
     }

@@ -83,7 +83,29 @@ export function redirectToLogin() {
 
 export type RefreshSessionResult =
     | { ok: true }
-    | { ok: false; reason: "unauthorized" | "step_up" | "transient" };
+    | { ok: false; reason: "unauthorized" | "step_up" | "transient" | "rate_limited" };
+
+export class AuthSessionPendingError extends Error {
+    readonly reason: "step_up" | "unauthenticated";
+
+    constructor(reason: "step_up" | "unauthenticated", message = "Auth session pending") {
+        super(message);
+        this.name = "AuthSessionPendingError";
+        this.reason = reason;
+    }
+}
+
+export function isAuthSessionPendingError(error: unknown): error is AuthSessionPendingError {
+    return error instanceof AuthSessionPendingError;
+}
+
+export function isPublicAuthRoute(pathname: string): boolean {
+    return (
+        pathname === "/login" ||
+        pathname === "/register" ||
+        pathname.startsWith("/auth/challenge")
+    );
+}
 
 function canUseBroadcastChannel(): boolean {
     return typeof window !== "undefined" && typeof BroadcastChannel !== "undefined";
@@ -223,6 +245,11 @@ export async function refreshSession(): Promise<RefreshSessionResult> {
             if (response.status === 401) {
                 broadcastRefresh({ type: "REFRESH_FAILED", senderId: tabId });
                 return { ok: false, reason: "unauthorized" } as const;
+            }
+
+            if (response.status === 429 || payload?.code === "AUTH_RATE_LIMITED") {
+                broadcastRefresh({ type: "REFRESH_FAILED", senderId: tabId });
+                return { ok: false, reason: "rate_limited" } as const;
             }
 
             broadcastRefresh({ type: "REFRESH_FAILED", senderId: tabId });
