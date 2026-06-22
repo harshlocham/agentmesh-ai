@@ -17,6 +17,7 @@ import { Loader2, RefreshCcw } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import ThemeSwitch from "@/components/home/theme-switch";
 import { toast } from "sonner";
+import { resetAuthBootstrap } from "@/lib/auth/authBootstrap";
 import { useUser } from "@/context/UserContext";
 
 export default function RegisterPage() {
@@ -125,6 +126,7 @@ export default function RegisterPage() {
                 throw new Error(data?.error || "Login failed after verification");
             }
 
+            resetAuthBootstrap();
             const me = await refreshUser();
             if (!me) {
                 throw new Error("Session could not be loaded. Try signing in.");

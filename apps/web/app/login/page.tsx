@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import React, { Suspense } from 'react';
+import { resetAuthBootstrap } from "@/lib/auth/authBootstrap";
 import { useUser } from "@/context/UserContext";
 import { Input } from '@/components/ui/input';
 import { Button } from "@/components/ui/button"
@@ -75,6 +76,7 @@ function Loginpage() {
                 throw new Error(data?.error || "Login failed");
             }
 
+            resetAuthBootstrap();
             const me = await refreshUser();
             if (!me) {
                 throw new Error("Session could not be loaded. Try again.");

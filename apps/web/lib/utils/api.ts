@@ -1,12 +1,13 @@
 import type { ClientConversation, ClientUser, UIMessage } from "@chat/types";
 import {
+    AuthSessionPendingError,
     isStepUpResponse,
     parseAuthPayload,
     redirectToLogin,
     redirectToStepUpChallenge,
     refreshSession,
 } from "@/lib/utils/auth/client-session";
-import { ensureAuthReady } from "@/lib/auth/authBootstrap";
+import { ensureAuthReady, authReady, isAuthenticated } from "@/lib/auth/authBootstrap";
 
 type ApiErrorPayload = {
     error?: string;
@@ -104,10 +105,29 @@ export async function authenticatedFetch(
     }
 
     if (response.status === 401 && !hasRetried && url !== "/api/auth/refresh") {
+        // Bootstrap already attempted refresh recovery; avoid a 401 -> refresh storm.
+        if (authReady && !isAuthenticated) {
+            return response;
+        }
+
         const refreshed = await refreshSession();
 
         if (refreshed.ok) {
             return authenticatedFetch(url, init, true);
+        }
+
+        if (refreshed.ok === false && refreshed.reason === "step_up") {
+            throw new AuthSessionPendingError(
+                "step_up",
+                payload?.error || "Step-up verification required"
+            );
+        }
+
+        if (refreshed.ok === false && refreshed.reason === "rate_limited") {
+            throw new AuthSessionPendingError(
+                "unauthenticated",
+                "Too many refresh attempts. Try again later."
+            );
         }
 
         if (refreshed.ok === false && refreshed.reason === "transient") {
@@ -115,6 +135,13 @@ export async function authenticatedFetch(
             const retriedRefresh = await refreshSession();
             if (retriedRefresh.ok) {
                 return authenticatedFetch(url, init, true);
+            }
+
+            if (retriedRefresh.ok === false && retriedRefresh.reason === "rate_limited") {
+                throw new AuthSessionPendingError(
+                    "unauthenticated",
+                    "Too many refresh attempts. Try again later."
+                );
             }
 
             if (retriedRefresh.ok === false && retriedRefresh.reason === "unauthorized") {

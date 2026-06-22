@@ -68,19 +68,17 @@ jobs:
 
       - name: Create Git Tag
         id: create_tag
+        if: steps.changesets.outputs.hasChangesets == 'false'
         run: |
           set -euo pipefail
 
-          # Read version from root package.json
+          # Root package.json is the single source of truth for v* release tags.
           VERSION=$(node -p "require('./package.json').version")
           TAG="v$VERSION"
 
-          echo "Creating tag: $TAG"
+          echo "Evaluating release tag: $TAG"
 
-          # Ensure tags are up to date
           git fetch --force --tags
-
-          # Determine current commit (checkout set to the release commit)
           RELEASE_SHA="$(git rev-parse HEAD)"
 
           if git rev-parse --verify "$TAG" >/dev/null 2>&1; then
@@ -88,10 +86,11 @@ jobs:
             if [ "$EXISTING_TAG_SHA" = "$RELEASE_SHA" ]; then
               echo "Tag $TAG already exists on this commit; skipping tag creation"
             else
-              echo "::error::Tag $TAG already exists and points to $EXISTING_TAG_SHA (expected $RELEASE_SHA)"
-              exit 1
+              echo "Tag $TAG already exists on $EXISTING_TAG_SHA; no new root version on $RELEASE_SHA"
+              echo "Skipping tag creation for this commit"
             fi
           else
+            echo "Creating tag: $TAG"
             git tag "$TAG"
             git push origin "$TAG"
           fi

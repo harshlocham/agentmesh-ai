@@ -33,6 +33,14 @@ async function recoverSessionAndMe(): Promise<boolean> {
         return me.ok;
     }
 
+    if (refreshed.ok === false && refreshed.reason === "step_up") {
+        return false;
+    }
+
+    if (refreshed.ok === false && refreshed.reason === "rate_limited") {
+        return false;
+    }
+
     if (refreshed.ok === false && refreshed.reason === "transient") {
         await wait(250);
         refreshed = await refreshSession();
@@ -52,6 +60,13 @@ async function recoverSessionAndMe(): Promise<boolean> {
     }
 
     return false;
+}
+
+export function resetAuthBootstrap() {
+    authReady = false;
+    isAuthenticated = false;
+    authLoading = true;
+    bootstrapPromise = null;
 }
 
 /** Ensure auth initialization runs once and completes before protected requests */
