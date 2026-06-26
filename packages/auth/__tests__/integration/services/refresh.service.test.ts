@@ -3,7 +3,6 @@ import { Types } from "mongoose";
 import { refreshService } from "../../../services/refresh.service.js";
 import { verifySession } from "../../../session/verify-session.js";
 import { verifyAccessToken, verifyRefreshToken } from "../../../tokens/verify.js";
-import { generateRefreshToken } from "../../../tokens/generate.js";
 import { hashToken } from "../../../session/token-hash.js";
 import { AuthStepUpRequiredError } from "../../../errors/auth-errors.js";
 import {
@@ -376,20 +375,20 @@ describe("services/refresh.service (db integration)", () => {
     });
 
     describe("findings", () => {
-        it("FINDING: rotation keeps the same payload, so a same-second refresh returns an IDENTICAL token (no real rotation)", async () => {
+        it("rotates to a distinct token even within the same second (req: unique jti)", async () => {
             const { ctx, issued } = await setupRefreshable();
 
-            // Refresh immediately (same wall-clock second as token issuance).
             const result = await refreshService({ refreshToken: issued.refreshToken, ...ctx });
 
-            const before = decodeJwt<{ sub: string; sessionId: string; tokenVersion: number; type: string }>(
+            expect(result.refreshToken).not.toBe(issued.refreshToken);
+
+            const before = decodeJwt<{ sub: string; sessionId: string; tokenVersion: number; type: string; jti?: string }>(
                 issued.refreshToken
             );
-            const after = decodeJwt<{ sub: string; sessionId: string; tokenVersion: number; type: string }>(
+            const after = decodeJwt<{ sub: string; sessionId: string; tokenVersion: number; type: string; jti?: string }>(
                 result.refreshToken
             );
 
-            // The identity-defining claims are byte-identical across "rotation".
             expect({
                 sub: after.sub,
                 sessionId: after.sessionId,
@@ -401,24 +400,10 @@ describe("services/refresh.service (db integration)", () => {
                 tokenVersion: before.tokenVersion,
                 type: before.type,
             });
+            expect(after.jti).toBeTruthy();
+            expect(after.jti).not.toBe(before.jti);
 
-            // Root cause, demonstrated deterministically with the REAL signer:
-            // identical payload signed within the same iat-second yields the exact
-            // same JWT string. Loop guarantees a same-second pair (back-to-back).
-            const payload = {
-                sub: before.sub,
-                sessionId: before.sessionId,
-                tokenVersion: before.tokenVersion,
-                type: "refresh" as const,
-            };
-            let a = generateRefreshToken(payload);
-            let b = generateRefreshToken(payload);
-            for (let i = 0; i < 1000 && decodeJwt<{ iat: number }>(a).iat !== decodeJwt<{ iat: number }>(b).iat; i++) {
-                a = generateRefreshToken(payload);
-                b = generateRefreshToken(payload);
-            }
-            expect(decodeJwt<{ iat: number }>(a).iat).toBe(decodeJwt<{ iat: number }>(b).iat);
-            expect(a).toBe(b);
+            await expect(verifySession(issued.refreshToken)).rejects.toThrow("Invalid session token");
         });
 
         it("does not create step-up challenges for invalid users before account checks", async () => {

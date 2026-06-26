@@ -33,6 +33,26 @@ describe("tokens/generate (real JWT signing)", () => {
         expectAlg(token, "HS256");
         expectClaims(token, { sub, sessionId, tokenVersion: 3, type: "refresh" });
         expectNotExpired(token);
+        expect(decodeJwt<{ jti?: string }>(token).jti).toMatch(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+        );
+    });
+
+    it("generates distinct refresh tokens for identical payloads within the same second", () => {
+        const payload = {
+            sub: objectId(),
+            sessionId: objectId(),
+            tokenVersion: 0,
+            type: "refresh" as const,
+        };
+
+        const first = generateRefreshToken(payload);
+        const second = generateRefreshToken(payload);
+
+        expect(first).not.toBe(second);
+        expect(decodeJwt<{ jti?: string }>(first).jti).not.toBe(
+            decodeJwt<{ jti?: string }>(second).jti
+        );
     });
 
     it("stamps an expiry (exp) on generated tokens", () => {
