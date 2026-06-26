@@ -30,11 +30,14 @@ export { logSecurityEvent } from "./services/security-event-logger";
 export { listAuthEvents } from "./services/list-auth-events.service";
 export {
     createGoogleOAuthState,
+    assertGoogleOAuthStateMatches,
     buildGoogleOAuthAuthorizeUrl,
     exchangeGoogleCodeForTokens,
     fetchGoogleUserProfile,
     loginWithGoogleCode,
 } from "./services/google-oauth.service";
+export type { GoogleUserProfile } from "./services/google-id-token";
+export { verifyGoogleIdToken } from "./services/google-id-token";
 export {
     sendEmailOtpService,
     verifyEmailOtpService,

@@ -3,18 +3,16 @@ import { User } from "@/models/User";
 import { createUserSession } from "../session/create-session";
 import { generateAccessToken } from "../tokens/generate";
 import type { IUser } from "@/models/User";
+import { verifyGoogleIdToken } from "./google-id-token";
+import type { GoogleUserProfile } from "./google-id-token";
 
-export type GoogleUserProfile = {
-    sub: string;
-    email: string;
-    email_verified: boolean;
-    name?: string;
-    picture?: string;
-};
+export type { GoogleUserProfile } from "./google-id-token";
 
 type LoginWithGoogleCodeInput = {
     code: string;
     redirectUri: string;
+    state: string;
+    expectedState: string;
     deviceId?: string;
     userAgent?: string;
     ipAddress?: string;
@@ -58,6 +56,12 @@ function normalizeEmail(email: string): string {
 
 export function createGoogleOAuthState(): string {
     return randomBytes(24).toString("hex");
+}
+
+export function assertGoogleOAuthStateMatches(receivedState: string, expectedState: string): void {
+    if (!receivedState || !expectedState || receivedState !== expectedState) {
+        throw new Error("GOOGLE_OAUTH_STATE_MISMATCH");
+    }
 }
 
 export function buildGoogleOAuthAuthorizeUrl({
@@ -241,12 +245,22 @@ async function ensureGoogleProviderLinked(user: IUser, profile: GoogleUserProfil
 export async function loginWithGoogleCode({
     code,
     redirectUri,
+    state,
+    expectedState,
     deviceId,
     userAgent,
     ipAddress,
 }: LoginWithGoogleCodeInput) {
+    assertGoogleOAuthStateMatches(state, expectedState);
+
+    const { clientId } = getGoogleOAuthConfig();
     const tokens = await exchangeGoogleCodeForTokens({ code, redirectUri });
-    const profile = await fetchGoogleUserProfile(tokens.access_token);
+
+    if (!tokens.id_token) {
+        throw new Error("Google token response missing id_token");
+    }
+
+    const profile = await verifyGoogleIdToken(tokens.id_token, clientId);
 
     if (!profile.email || !profile.email_verified) {
         throw new Error("Google account email is missing or unverified");

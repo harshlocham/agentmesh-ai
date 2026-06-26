@@ -1,11 +1,15 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { Types } from "mongoose";
 import { loginUser } from "../../services/login.service.js";
 import { refreshService } from "../../services/refresh.service.js";
 import { logoutService } from "../../services/logout.service.js";
 import { changePasswordService } from "../../services/change-password.service.js";
 import { completePasswordStepUpChallenge } from "../../services/step-up-password.service.js";
-import { loginWithGoogleCode } from "../../services/google-oauth.service.js";
+import {
+    createGoogleOAuthState,
+    loginWithGoogleCode,
+} from "../../services/google-oauth.service.js";
+import { resetGoogleIdTokenVerifierCacheForTests } from "../../services/google-id-token.js";
 import { verifySession } from "../../session/verify-session.js";
 import { verifyAccessToken } from "../../tokens/verify.js";
 import { AuthStepUpRequiredError } from "../../errors/auth-errors.js";
@@ -18,40 +22,57 @@ import {
     buildRequestContext,
     driftedContext,
 } from "../helpers/factories/request-context.factory.js";
+import {
+    ensureGoogleIdTokenTestKeys,
+    getGoogleTestJwksResponse,
+    resolveFetchUrl,
+    signGoogleTestIdToken,
+} from "../helpers/google-id-token.factory.js";
 
 useTestDb();
 
 const PASSWORD = "lifecycle-p4ssword";
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const ROTATION_DELAY_MS = 1200;
+const GOOGLE_OAUTH_STATE = createGoogleOAuthState();
+
+beforeAll(async () => {
+    await ensureGoogleIdTokenTestKeys();
+});
 
 function countSessions(userId: string): Promise<number> {
     return SessionModel.countDocuments({ userId: new Types.ObjectId(userId) });
 }
 
-function stubGoogleFetch(profile: {
+async function stubGoogleFetch(profile: {
     sub: string;
     email: string;
     email_verified?: boolean;
     name?: string;
     picture?: string;
 }) {
+    resetGoogleIdTokenVerifierCacheForTests();
+    const idToken = await signGoogleTestIdToken({
+        ...profile,
+        email_verified: profile.email_verified ?? true,
+    });
+
     vi.stubGlobal(
         "fetch",
         vi.fn(async (input: unknown) => {
-            const url = String(input);
+            const url = resolveFetchUrl(input);
             if (url.includes("oauth2.googleapis.com/token")) {
                 return {
                     ok: true,
-                    json: async () => ({ access_token: "ya29.x", id_token: "i.d.t" }),
+                    json: async () => ({ access_token: "ya29.x", id_token: idToken }),
                     text: async () => "",
                 } as unknown as Response;
             }
-            if (url.includes("openidconnect.googleapis.com/v1/userinfo")) {
+            if (url.includes("googleapis.com/oauth2/v3/certs")) {
                 return {
                     ok: true,
-                    json: async () => ({ email_verified: true, ...profile }),
-                    text: async () => "",
+                    json: async () => getGoogleTestJwksResponse(),
+                    text: async () => JSON.stringify(getGoogleTestJwksResponse()),
                 } as unknown as Response;
             }
             throw new Error(`Unexpected fetch to ${url}`);
@@ -61,6 +82,7 @@ function stubGoogleFetch(profile: {
 
 afterEach(() => {
     vi.unstubAllGlobals();
+    resetGoogleIdTokenVerifierCacheForTests();
 });
 
 describe("auth lifecycle (e2e integration)", () => {
@@ -153,11 +175,13 @@ describe("auth lifecycle (e2e integration)", () => {
 
     it("Flow 4: Google Login -> Refresh -> Logout", async () => {
         const ctx = buildRequestContext();
-        stubGoogleFetch({ sub: "flow4-sub", email: "flow4@gmail.com" });
+        await stubGoogleFetch({ sub: "flow4-sub", email: "flow4@gmail.com" });
 
         const loggedIn = await loginWithGoogleCode({
             code: "code",
             redirectUri: "https://app.test/cb",
+            state: GOOGLE_OAUTH_STATE,
+            expectedState: GOOGLE_OAUTH_STATE,
             ...ctx,
         });
         const userId = loggedIn.user._id.toString();

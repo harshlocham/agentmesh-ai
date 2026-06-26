@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
     userFindOneMock,
@@ -30,7 +30,14 @@ vi.mock("../tokens/generate", () => ({
     generateAccessToken: generateAccessTokenMock,
 }));
 
-import { loginWithGoogleCode } from "../services/google-oauth.service";
+import { createGoogleOAuthState, loginWithGoogleCode } from "../services/google-oauth.service";
+import { resetGoogleIdTokenVerifierCacheForTests } from "../services/google-id-token";
+import {
+    ensureGoogleIdTokenTestKeys,
+    getGoogleTestJwksResponse,
+    resolveFetchUrl,
+    signGoogleTestIdToken,
+} from "./helpers/google-id-token.factory";
 
 type MockResponse<T> = {
     ok: boolean;
@@ -66,7 +73,51 @@ function makeUserDoc(overrides?: Partial<any>) {
     };
 }
 
+const TEST_STATE = createGoogleOAuthState();
+
+async function stubOAuthFetch(profile: {
+    sub: string;
+    email: string;
+    email_verified?: boolean;
+    name?: string;
+    picture?: string;
+}) {
+    resetGoogleIdTokenVerifierCacheForTests();
+    const idToken = await signGoogleTestIdToken({
+        ...profile,
+        email_verified: profile.email_verified ?? true,
+    });
+
+    const fetchMock = vi.fn(async (input: unknown) => {
+        const url = resolveFetchUrl(input);
+        if (url.includes("oauth2.googleapis.com/token")) {
+            return jsonResponse({ access_token: "google-access-token", id_token: idToken });
+        }
+        if (url.includes("googleapis.com/oauth2/v3/certs")) {
+            return jsonResponse(getGoogleTestJwksResponse());
+        }
+        throw new Error(`Unexpected fetch to ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    return fetchMock;
+}
+
+function loginParams(extra: Record<string, unknown> = {}) {
+    return {
+        code: "oauth-code",
+        redirectUri: "http://localhost:3000/api/auth/google/callback",
+        state: TEST_STATE,
+        expectedState: TEST_STATE,
+        ...extra,
+    };
+}
+
 describe("google-oauth.service integration", () => {
+    beforeAll(async () => {
+        await ensureGoogleIdTokenTestKeys();
+    });
+
     beforeEach(() => {
         vi.clearAllMocks();
 
@@ -79,89 +130,63 @@ describe("google-oauth.service integration", () => {
         createUserSessionMock.mockResolvedValue({ refreshToken: "refresh-token" });
     });
 
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        resetGoogleIdTokenVerifierCacheForTests();
+    });
+
     it("1) rejects password account login when Google is not linked", async () => {
-        const fetchMock = vi
-            .fn()
-            .mockResolvedValueOnce(jsonResponse({ access_token: "google-access-token" }))
-            .mockResolvedValueOnce(
-                jsonResponse({
-                    sub: "google-sub-1",
-                    email: "user@example.com",
-                    email_verified: true,
-                    name: "User",
-                })
-            );
-        vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+        await stubOAuthFetch({
+            sub: "google-sub-1",
+            email: "user@example.com",
+            name: "User",
+        });
 
         userFindOneMock
             .mockResolvedValueOnce(null)
             .mockResolvedValueOnce(
-            makeUserDoc({
-                password: "hashed-password",
-                googleSub: "",
-                authProviders: ["password"],
-            })
+                makeUserDoc({
+                    password: "hashed-password",
+                    googleSub: "",
+                    authProviders: ["password"],
+                })
             );
 
-        await expect(
-            loginWithGoogleCode({
-                code: "oauth-code",
-                redirectUri: "http://localhost:3000/api/auth/google/callback",
-            })
-        ).rejects.toThrow("GOOGLE_ACCOUNT_NOT_LINKED");
+        await expect(loginWithGoogleCode(loginParams())).rejects.toThrow("GOOGLE_ACCOUNT_NOT_LINKED");
 
         expect(userUpdateOneMock).not.toHaveBeenCalled();
         expect(createUserSessionMock).not.toHaveBeenCalled();
     });
 
     it("2) rejects login when existing linked Google identity mismatches", async () => {
-        const fetchMock = vi
-            .fn()
-            .mockResolvedValueOnce(jsonResponse({ access_token: "google-access-token" }))
-            .mockResolvedValueOnce(
-                jsonResponse({
-                    sub: "google-sub-B",
-                    email: "user@example.com",
-                    email_verified: true,
-                    name: "User",
-                })
-            );
-        vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+        await stubOAuthFetch({
+            sub: "google-sub-B",
+            email: "user@example.com",
+            name: "User",
+        });
 
         userFindOneMock
             .mockResolvedValueOnce(null)
             .mockResolvedValueOnce(
-            makeUserDoc({
-                googleSub: "google-sub-A",
-                authProviders: ["google"],
-            })
+                makeUserDoc({
+                    googleSub: "google-sub-A",
+                    authProviders: ["google"],
+                })
             );
 
-        await expect(
-            loginWithGoogleCode({
-                code: "oauth-code",
-                redirectUri: "http://localhost:3000/api/auth/google/callback",
-            })
-        ).rejects.toThrow("GOOGLE_IDENTITY_MISMATCH");
+        await expect(loginWithGoogleCode(loginParams())).rejects.toThrow("GOOGLE_IDENTITY_MISMATCH");
 
         expect(userUpdateOneMock).not.toHaveBeenCalled();
         expect(createUserSessionMock).not.toHaveBeenCalled();
     });
 
     it("3) creates a new Google user on first-time login", async () => {
-        const fetchMock = vi
-            .fn()
-            .mockResolvedValueOnce(jsonResponse({ access_token: "google-access-token" }))
-            .mockResolvedValueOnce(
-                jsonResponse({
-                    sub: "google-sub-new",
-                    email: "new@example.com",
-                    email_verified: true,
-                    name: "New User",
-                    picture: "https://example.com/avatar.png",
-                })
-            );
-        vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+        await stubOAuthFetch({
+            sub: "google-sub-new",
+            email: "new@example.com",
+            name: "New User",
+            picture: "https://example.com/avatar.png",
+        });
 
         const createdUser = makeUserDoc({
             _id: { toString: () => "new-user-id" },
@@ -179,12 +204,9 @@ describe("google-oauth.service integration", () => {
             .mockResolvedValueOnce(null)
             .mockResolvedValueOnce(createdUser);
 
-        const result = await loginWithGoogleCode({
-            code: "oauth-code",
-            redirectUri: "http://localhost:3000/api/auth/google/callback",
-            userAgent: "test-agent",
-            ipAddress: "127.0.0.1",
-        });
+        const result = await loginWithGoogleCode(
+            loginParams({ userAgent: "test-agent", ipAddress: "127.0.0.1" })
+        );
 
         expect(userUpdateOneMock).toHaveBeenCalledWith(
             { email: "new@example.com" },
@@ -210,18 +232,11 @@ describe("google-oauth.service integration", () => {
     });
 
     it("4) logs in successfully when account is already linked", async () => {
-        const fetchMock = vi
-            .fn()
-            .mockResolvedValueOnce(jsonResponse({ access_token: "google-access-token" }))
-            .mockResolvedValueOnce(
-                jsonResponse({
-                    sub: "google-sub-1",
-                    email: "user@example.com",
-                    email_verified: true,
-                    name: "User",
-                })
-            );
-        vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+        await stubOAuthFetch({
+            sub: "google-sub-1",
+            email: "user@example.com",
+            name: "User",
+        });
 
         const existingLinkedUser = makeUserDoc({
             _id: { toString: () => "linked-user-id" },
@@ -233,12 +248,9 @@ describe("google-oauth.service integration", () => {
         userUpdateOneMock.mockResolvedValueOnce({ upsertedCount: 0 });
         userFindOneMock.mockResolvedValueOnce(existingLinkedUser);
 
-        const result = await loginWithGoogleCode({
-            code: "oauth-code",
-            redirectUri: "http://localhost:3000/api/auth/google/callback",
-            userAgent: "test-agent",
-            ipAddress: "127.0.0.1",
-        });
+        const result = await loginWithGoogleCode(
+            loginParams({ userAgent: "test-agent", ipAddress: "127.0.0.1" })
+        );
 
         expect(userUpdateOneMock).not.toHaveBeenCalled();
         expect(generateAccessTokenMock).toHaveBeenCalledWith(
@@ -251,18 +263,11 @@ describe("google-oauth.service integration", () => {
     });
 
     it("5) resolves account by Google subject even when email changes", async () => {
-        const fetchMock = vi
-            .fn()
-            .mockResolvedValueOnce(jsonResponse({ access_token: "google-access-token" }))
-            .mockResolvedValueOnce(
-                jsonResponse({
-                    sub: "google-sub-1",
-                    email: "new-email@example.com",
-                    email_verified: true,
-                    name: "User",
-                })
-            );
-        vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+        await stubOAuthFetch({
+            sub: "google-sub-1",
+            email: "new-email@example.com",
+            name: "User",
+        });
 
         const existingLinkedUser = makeUserDoc({
             _id: { toString: () => "linked-user-id" },
@@ -273,12 +278,9 @@ describe("google-oauth.service integration", () => {
 
         userFindOneMock.mockResolvedValueOnce(existingLinkedUser);
 
-        const result = await loginWithGoogleCode({
-            code: "oauth-code",
-            redirectUri: "http://localhost:3000/api/auth/google/callback",
-            userAgent: "test-agent",
-            ipAddress: "127.0.0.1",
-        });
+        const result = await loginWithGoogleCode(
+            loginParams({ userAgent: "test-agent", ipAddress: "127.0.0.1" })
+        );
 
         expect(userUpdateOneMock).not.toHaveBeenCalled();
         expect(createUserSessionMock).toHaveBeenCalledWith(

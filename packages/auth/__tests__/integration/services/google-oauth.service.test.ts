@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
     loginWithGoogleCode,
     exchangeGoogleCodeForTokens,
@@ -6,17 +6,30 @@ import {
     upsertGoogleUserByEmailAtomic,
     createGoogleOAuthState,
     buildGoogleOAuthAuthorizeUrl,
+    assertGoogleOAuthStateMatches,
     type GoogleUserProfile,
 } from "../../../services/google-oauth.service.js";
+import { resetGoogleIdTokenVerifierCacheForTests } from "../../../services/google-id-token.js";
 import { verifySession } from "../../../session/verify-session.js";
 import { verifyAccessToken } from "../../../tokens/verify.js";
 import { User } from "../../../../db/models/User.js";
 import { useTestDb } from "../../helpers/db.js";
 import { createUser } from "../../helpers/factories/user.factory.js";
+import {
+    ensureGoogleIdTokenTestKeys,
+    getGoogleTestJwksResponse,
+    resolveFetchUrl,
+    signGoogleTestIdToken,
+} from "../../helpers/google-id-token.factory.js";
 
 useTestDb();
 
 const REDIRECT_URI = "https://app.test/auth/google/callback";
+const TEST_OAUTH_STATE = createGoogleOAuthState();
+
+beforeAll(async () => {
+    await ensureGoogleIdTokenTestKeys();
+});
 
 type GoogleFetchOpts = {
     tokenOk?: boolean;
@@ -25,22 +38,26 @@ type GoogleFetchOpts = {
     profileOk?: boolean;
     profile?: Partial<GoogleUserProfile>;
     profileErrorText?: string;
+    idToken?: string | null;
 };
 
 /**
- * Stub the Google HTTP boundary only. Token exchange + userinfo are external
+ * Stub the Google HTTP boundary only. Token exchange + JWKS are external
  * third-party endpoints; everything else (Mongo upsert, session creation,
  * bcrypt, JWT signing) runs for real.
  */
-function stubGoogleFetch(opts: GoogleFetchOpts = {}): ReturnType<typeof vi.fn> {
+async function stubGoogleFetch(opts: GoogleFetchOpts = {}): Promise<ReturnType<typeof vi.fn>> {
     const {
         tokenOk = true,
-        tokenBody = { access_token: "ya29.test-access", id_token: "header.payload.sig" },
+        tokenBody = {},
         tokenErrorText = "invalid_grant",
         profileOk = true,
         profile = {},
         profileErrorText = "unauthorized",
+        idToken,
     } = opts;
+
+    resetGoogleIdTokenVerifierCacheForTests();
 
     const resolvedProfile: GoogleUserProfile = {
         sub: profile.sub ?? "google-sub-123",
@@ -50,13 +67,29 @@ function stubGoogleFetch(opts: GoogleFetchOpts = {}): ReturnType<typeof vi.fn> {
         picture: profile.picture ?? "https://pic.test/a.png",
     };
 
+    const signedIdToken =
+        idToken === null
+            ? undefined
+            : idToken ?? (await signGoogleTestIdToken(resolvedProfile));
+
     const fetchMock = vi.fn(async (input: unknown) => {
-        const url = String(input);
+        const url = resolveFetchUrl(input);
         if (url.includes("oauth2.googleapis.com/token")) {
             return {
                 ok: tokenOk,
-                json: async () => tokenBody,
+                json: async () => ({
+                    access_token: "ya29.test-access",
+                    id_token: signedIdToken,
+                    ...tokenBody,
+                }),
                 text: async () => (tokenOk ? JSON.stringify(tokenBody) : tokenErrorText),
+            } as unknown as Response;
+        }
+        if (url.includes("googleapis.com/oauth2/v3/certs")) {
+            return {
+                ok: true,
+                json: async () => getGoogleTestJwksResponse(),
+                text: async () => JSON.stringify(getGoogleTestJwksResponse()),
             } as unknown as Response;
         }
         if (url.includes("openidconnect.googleapis.com/v1/userinfo")) {
@@ -73,11 +106,19 @@ function stubGoogleFetch(opts: GoogleFetchOpts = {}): ReturnType<typeof vi.fn> {
     return fetchMock;
 }
 
-function login(profile: Partial<GoogleUserProfile> = {}, fetchOpts: GoogleFetchOpts = {}) {
-    stubGoogleFetch({ ...fetchOpts, profile: { ...fetchOpts.profile, ...profile } });
+async function login(
+    profile: Partial<GoogleUserProfile> = {},
+    fetchOpts: GoogleFetchOpts = {},
+    state: { received?: string; expected?: string } = {}
+) {
+    await stubGoogleFetch({ ...fetchOpts, profile: { ...fetchOpts.profile, ...profile } });
+    const receivedState = state.received ?? TEST_OAUTH_STATE;
+    const expectedState = state.expected ?? TEST_OAUTH_STATE;
     return loginWithGoogleCode({
         code: "auth-code",
         redirectUri: REDIRECT_URI,
+        state: receivedState,
+        expectedState,
         deviceId: "device-1",
         userAgent: "TestAgent/1.0",
         ipAddress: "203.0.113.5",
@@ -86,6 +127,7 @@ function login(profile: Partial<GoogleUserProfile> = {}, fetchOpts: GoogleFetchO
 
 afterEach(() => {
     vi.unstubAllGlobals();
+    resetGoogleIdTokenVerifierCacheForTests();
 });
 
 describe("services/google-oauth.service (db integration)", () => {
@@ -202,39 +244,64 @@ describe("services/google-oauth.service (db integration)", () => {
         });
 
         it("propagates a token-exchange failure", async () => {
-            stubGoogleFetch({ tokenOk: false, tokenErrorText: "invalid_grant" });
+            await stubGoogleFetch({ tokenOk: false, tokenErrorText: "invalid_grant" });
             await expect(
                 exchangeGoogleCodeForTokens({ code: "bad", redirectUri: REDIRECT_URI })
             ).rejects.toThrow("Google token exchange failed: invalid_grant");
         });
 
         it("propagates a userinfo fetch failure", async () => {
-            stubGoogleFetch({ profileOk: false, profileErrorText: "401 unauthorized" });
+            await stubGoogleFetch({ profileOk: false, profileErrorText: "401 unauthorized" });
             await expect(fetchGoogleUserProfile("bad-access-token")).rejects.toThrow(
                 "Failed to fetch Google user profile: 401 unauthorized"
             );
         });
 
-        it("surfaces a userinfo failure through the full login flow", async () => {
-            stubGoogleFetch({ profileOk: false, profileErrorText: "boom" });
+        it("rejects login when the OAuth state does not match", async () => {
             await expect(
-                loginWithGoogleCode({ code: "c", redirectUri: REDIRECT_URI })
-            ).rejects.toThrow("Failed to fetch Google user profile");
+                login(
+                    { sub: "sub-state", email: "state@gmail.com" },
+                    {},
+                    { received: "received-state", expected: "stored-state" }
+                )
+            ).rejects.toThrow("GOOGLE_OAUTH_STATE_MISMATCH");
+        });
+
+        it("rejects login when Google omits id_token", async () => {
+            await expect(
+                login(
+                    { sub: "sub-noid", email: "noid@gmail.com" },
+                    { idToken: null }
+                )
+            ).rejects.toThrow("Google token response missing id_token");
+        });
+
+        it("rejects login when id_token signature verification fails", async () => {
+            await expect(
+                login(
+                    { sub: "sub-bad", email: "bad@gmail.com" },
+                    { idToken: "not-a-real-jwt" }
+                )
+            ).rejects.toThrow();
         });
     });
 
     describe("token exchange & profile fetch", () => {
         it("returns the parsed token payload on success", async () => {
-            stubGoogleFetch({
-                tokenBody: { access_token: "ya29.ok", id_token: "id.tok", refresh_token: "r" },
+            const idToken = await signGoogleTestIdToken({
+                sub: "sub-token",
+                email: "token@gmail.com",
+            });
+            await stubGoogleFetch({
+                tokenBody: { access_token: "ya29.ok", id_token: idToken, refresh_token: "r" },
             });
             const tokens = await exchangeGoogleCodeForTokens({ code: "c", redirectUri: REDIRECT_URI });
             expect(tokens.access_token).toBe("ya29.ok");
-            expect(tokens.id_token).toBe("id.tok");
+            expect(tokens.id_token).toBe(idToken);
         });
 
         it("returns the parsed Google profile on success", async () => {
-            stubGoogleFetch({ profile: { sub: "s1", email: "p@gmail.com" } });
+            await stubGoogleFetch({ profile: { sub: "s1", email: "p@gmail.com" } });
             const profile = await fetchGoogleUserProfile("access");
             expect(profile.sub).toBe("s1");
             expect(profile.email).toBe("p@gmail.com");
@@ -327,8 +394,7 @@ describe("services/google-oauth.service (db integration)", () => {
             expect([a, b]).toContain("ok");
         });
 
-        it("FINDING: login performs no CSRF state validation (state is caller's responsibility)", async () => {
-            // The module can generate/format state for the authorize URL...
+        it("requires matching OAuth state before completing login", async () => {
             const state = createGoogleOAuthState();
             expect(state).toMatch(/^[a-f0-9]{48}$/);
             expect(createGoogleOAuthState()).not.toBe(state);
@@ -338,26 +404,40 @@ describe("services/google-oauth.service (db integration)", () => {
             expect(url).toContain("response_type=code");
             expect(url).toContain("scope=openid+email+profile");
 
-            // ...but loginWithGoogleCode accepts no state parameter and never
-            // validates one, so CSRF protection is entirely the caller's job.
-            const result = await login({ sub: "sub-nostate", email: "nostate@gmail.com" });
+            expect(() => assertGoogleOAuthStateMatches("wrong", state)).toThrow(
+                "GOOGLE_OAUTH_STATE_MISMATCH"
+            );
+
+            const result = await login(
+                { sub: "sub-state-ok", email: "stateok@gmail.com" },
+                {},
+                { received: state, expected: state }
+            );
             expect(result.accessToken).toBeTruthy();
         });
 
-        it("FINDING: identity is taken from the userinfo response; the id_token is never validated", async () => {
-            // A blatantly malformed id_token does not impede login - identity is
-            // sourced from the (separately fetched) userinfo profile, and the
-            // id_token JWT is never decoded or signature-checked.
-            const fetchMock = stubGoogleFetch({
-                tokenBody: { access_token: "ya29.x", id_token: "not-a-real-jwt" },
+        it("derives identity from a verified id_token and does not call userinfo", async () => {
+            const fetchMock = await stubGoogleFetch({
                 profile: { sub: "sub-idtoken", email: "idtoken@gmail.com" },
             });
 
-            const result = await loginWithGoogleCode({ code: "c", redirectUri: REDIRECT_URI });
+            const result = await loginWithGoogleCode({
+                code: "auth-code",
+                redirectUri: REDIRECT_URI,
+                state: TEST_OAUTH_STATE,
+                expectedState: TEST_OAUTH_STATE,
+                deviceId: "device-1",
+                userAgent: "TestAgent/1.0",
+                ipAddress: "203.0.113.5",
+            });
+
             expect(result.user.googleSub).toBe("sub-idtoken");
-            // userinfo endpoint was consulted; id_token was not verified anywhere.
-            expect(fetchMock).toHaveBeenCalledWith(
+            expect(fetchMock).not.toHaveBeenCalledWith(
                 expect.stringContaining("openidconnect.googleapis.com/v1/userinfo"),
+                expect.anything()
+            );
+            expect(fetchMock).toHaveBeenCalledWith(
+                expect.stringContaining("oauth2.googleapis.com/token"),
                 expect.anything()
             );
         });

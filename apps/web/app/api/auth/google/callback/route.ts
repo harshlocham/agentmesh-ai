@@ -58,6 +58,18 @@ function toLoginErrorCode(message: string): string {
         return "google_token_exchange_failed";
     }
 
+    if (message === "GOOGLE_OAUTH_STATE_MISMATCH") {
+        return "google_oauth_state";
+    }
+
+    if (message === "Google token response missing id_token") {
+        return "google_token_exchange_failed";
+    }
+
+    if (message.startsWith("Google id_token")) {
+        return "google_token_exchange_failed";
+    }
+
     if (message === "GOOGLE_ACCOUNT_NOT_LINKED") {
         return "google_account_not_linked";
     }
@@ -125,6 +137,8 @@ export async function GET(req: NextRequest) {
         const { user, accessToken, refreshToken } = await loginWithGoogleCode({
             code,
             redirectUri: getRedirectUri(req),
+            state,
+            expectedState: storedState,
             deviceId,
             userAgent,
             ipAddress,
