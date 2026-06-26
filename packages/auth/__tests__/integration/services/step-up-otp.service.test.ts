@@ -45,6 +45,7 @@ async function setupOtp(opts: {
     status?: "active" | "banned";
     createUserDoc?: boolean;
     challengeUserId?: string;
+    challengeSessionId?: string;
 } = {}): Promise<OtpSetup> {
     const userTokenVersion = opts.userTokenVersion ?? 0;
     const sessionTokenVersion = opts.sessionTokenVersion ?? userTokenVersion;
@@ -71,6 +72,7 @@ async function setupOtp(opts: {
 
     const challenge = await createPendingPasswordChallenge({
         userId: opts.challengeUserId ?? userId,
+        sessionId: opts.challengeSessionId ?? issued.sessionId,
     });
 
     return { userId, email, issued, challengeId: challenge._id.toString() };
@@ -238,7 +240,10 @@ describe("services/step-up-otp.service (db integration)", () => {
                 userId: user._id.toString(),
                 state: "step_up_pending",
             });
-            const challenge = await createExpiredChallenge({ userId: user._id.toString() });
+            const challenge = await createExpiredChallenge({
+                userId: user._id.toString(),
+                sessionId: issued.sessionId,
+            });
 
             await expect(
                 completeOtpStepUpChallenge({
@@ -256,7 +261,10 @@ describe("services/step-up-otp.service (db integration)", () => {
                 userId: user._id.toString(),
                 state: "step_up_pending",
             });
-            const challenge = await createVerifiedChallenge({ userId: user._id.toString() });
+            const challenge = await createVerifiedChallenge({
+                userId: user._id.toString(),
+                sessionId: issued.sessionId,
+            });
 
             await expect(
                 completeOtpStepUpChallenge({
@@ -431,30 +439,33 @@ describe("services/step-up-otp.service (db integration)", () => {
             expect((await findSessionById(issued.sessionId))?.revokedAt).toBeInstanceOf(Date);
         });
 
-        it("FINDING: OTP challenges are not bound to a session - another pending session can consume them", async () => {
+        it("rejects a challenge bound to a different session and revokes the session", async () => {
             const user = await createUser();
             const userId = user._id.toString();
             const sessionA = await issueRefreshTokenForSession({ userId, state: "step_up_pending" });
             const sessionB = await issueRefreshTokenForSession({ userId, state: "step_up_pending" });
-            const challenge = await createPendingPasswordChallenge({ userId });
+            const challenge = await createPendingPasswordChallenge({
+                userId,
+                sessionId: sessionA.sessionId,
+            });
             const challengeId = challenge._id.toString();
 
-            // Request OTP against session A...
             const { otp } = await requestOtpStepUpChallenge({
                 challengeId,
                 refreshToken: sessionA.refreshToken,
             });
 
-            // ...then complete it against session B.
-            const result = await completeOtpStepUpChallenge({
-                challengeId,
-                otp,
-                refreshToken: sessionB.refreshToken,
-            });
+            await expect(
+                completeOtpStepUpChallenge({
+                    challengeId,
+                    otp,
+                    refreshToken: sessionB.refreshToken,
+                })
+            ).rejects.toThrow("Challenge session mismatch");
 
-            expect(result.sessionId).toBe(sessionB.sessionId);
-            expect((await findSessionById(sessionB.sessionId))?.state).toBe("active");
+            expect((await findSessionById(sessionB.sessionId))?.revokedAt).toBeInstanceOf(Date);
             expect((await findSessionById(sessionA.sessionId))?.state).toBe("step_up_pending");
+            expect((await readChallenge(challengeId))?.status).toBe("pending");
         });
     });
 });

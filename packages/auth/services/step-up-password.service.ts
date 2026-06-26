@@ -36,6 +36,11 @@ export async function completePasswordStepUpChallenge({
         throw new Error("Challenge user mismatch");
     }
 
+    if (String(challenge.sessionId) !== payload.sessionId) {
+        await revokeSession(payload.sessionId);
+        throw new Error("Challenge session mismatch");
+    }
+
     if (challenge.status !== "pending") {
         await revokeSession(payload.sessionId);
         throw new Error("Challenge is not pending");

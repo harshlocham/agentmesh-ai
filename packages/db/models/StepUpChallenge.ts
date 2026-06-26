@@ -16,6 +16,7 @@ type StepUpChallengeOtpState = {
 export interface IStepUpChallenge extends Document {
     id: string;
     userId: Types.ObjectId;
+    sessionId: Types.ObjectId;
     status: StepUpChallengeStatus;
     verificationMethod: StepUpChallengeVerificationMethod;
     expiresAt: Date;
@@ -31,6 +32,12 @@ const StepUpChallengeSchema = new Schema<IStepUpChallenge>(
         userId: {
             type: Schema.Types.ObjectId,
             ref: "User",
+            required: true,
+            index: true,
+        },
+        sessionId: {
+            type: Schema.Types.ObjectId,
+            ref: "Session",
             required: true,
             index: true,
         },
@@ -69,12 +76,13 @@ const StepUpChallengeSchema = new Schema<IStepUpChallenge>(
 
 // Auto-delete challenges once expiration time is reached.
 StepUpChallengeSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+StepUpChallengeSchema.index({ userId: 1, sessionId: 1, status: 1 });
 
 export const StepUpChallenge: Model<IStepUpChallenge> =
     (mongoose.models.StepUpChallenge as Model<IStepUpChallenge>) ||
     mongoose.model<IStepUpChallenge>("StepUpChallenge", StepUpChallengeSchema);
 
-function assertValidObjectId(id: string, fieldName: "id" | "userId"): Types.ObjectId {
+function assertValidObjectId(id: string, fieldName: "id" | "userId" | "sessionId"): Types.ObjectId {
     if (!Types.ObjectId.isValid(id)) {
         throw new Error(`Invalid ${fieldName}`);
     }
@@ -83,12 +91,15 @@ function assertValidObjectId(id: string, fieldName: "id" | "userId"): Types.Obje
 
 export async function createChallenge(
     userId: string,
+    sessionId: string,
     metadata?: StepUpChallengeMetadata
 ): Promise<IStepUpChallenge> {
     const safeUserId = assertValidObjectId(userId, "userId");
+    const safeSessionId = assertValidObjectId(sessionId, "sessionId");
 
     return StepUpChallenge.create({
         userId: safeUserId,
+        sessionId: safeSessionId,
         status: "pending",
         verificationMethod: "password",
         expiresAt: new Date(Date.now() + STEP_UP_TTL_MS),

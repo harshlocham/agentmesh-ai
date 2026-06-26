@@ -74,6 +74,7 @@ export const refreshService = async ({
     if (session.state === "step_up_pending") {
         const existingChallenge = await StepUpChallenge.findOne({
             userId: payload.sub,
+            sessionId: payload.sessionId,
             status: "pending",
             expiresAt: { $gt: new Date() },
         })
@@ -84,7 +85,7 @@ export const refreshService = async ({
         const challengeId = existingChallenge
             ? existingChallenge._id.toString()
             : (
-                  await createChallenge(payload.sub, {
+                  await createChallenge(payload.sub, payload.sessionId, {
                       ip: ipAddress,
                       userAgent,
                   })
@@ -98,7 +99,7 @@ export const refreshService = async ({
     }
 
     if (fingerprint.requiresStepUp) {
-        const challenge = await createChallenge(payload.sub, {
+        const challenge = await createChallenge(payload.sub, payload.sessionId, {
             ip: ipAddress,
             userAgent,
         });

@@ -49,6 +49,7 @@ async function setupStepUp(opts: {
     plainPassword?: string | null;
     createUserDoc?: boolean;
     challengeUserId?: string;
+    challengeSessionId?: string;
 } = {}): Promise<StepUpSetup> {
     const userTokenVersion = opts.userTokenVersion ?? 0;
     const sessionTokenVersion = opts.sessionTokenVersion ?? userTokenVersion;
@@ -76,6 +77,7 @@ async function setupStepUp(opts: {
 
     const challenge = await createPendingPasswordChallenge({
         userId: opts.challengeUserId ?? userId,
+        sessionId: opts.challengeSessionId ?? issued.sessionId,
     });
 
     return { userId, issued, challengeId: challenge._id.toString() };
@@ -210,7 +212,10 @@ describe("services/step-up-password.service (db integration)", () => {
                 userId,
                 state: "step_up_pending",
             });
-            const challenge = await createExpiredChallenge({ userId });
+            const challenge = await createExpiredChallenge({
+                userId,
+                sessionId: issued.sessionId,
+            });
 
             // getChallengeById() lazily flips the expired-but-pending row to
             // "expired", so the service's dedicated "Challenge expired" branch is
@@ -235,7 +240,10 @@ describe("services/step-up-password.service (db integration)", () => {
                 userId,
                 state: "step_up_pending",
             });
-            const challenge = await createVerifiedChallenge({ userId });
+            const challenge = await createVerifiedChallenge({
+                userId,
+                sessionId: issued.sessionId,
+            });
 
             await expect(
                 completePasswordStepUpChallenge({
@@ -357,11 +365,10 @@ describe("services/step-up-password.service (db integration)", () => {
             expect(session?.revokedAt).toBeInstanceOf(Date);
         });
 
-        it("FINDING: challenges are NOT bound to a session - any pending session of the same user can consume one (req 15)", async () => {
+        it("rejects a challenge bound to a different session and revokes the session (req 15)", async () => {
             const user = await createUser({ plainPassword: PASSWORD });
             const userId = user._id.toString();
 
-            // Two distinct step_up_pending sessions for the same user.
             const sessionA = await issueRefreshTokenForSession({
                 userId,
                 state: "step_up_pending",
@@ -371,21 +378,22 @@ describe("services/step-up-password.service (db integration)", () => {
                 state: "step_up_pending",
             });
 
-            // A single challenge (conceptually raised for one session) ...
-            const challenge = await createPendingPasswordChallenge({ userId });
-
-            // ... is accepted when completed against the OTHER session, because
-            // the service only checks challenge.userId === payload.sub.
-            const result = await completePasswordStepUpChallenge({
-                challengeId: challenge._id.toString(),
-                password: PASSWORD,
-                refreshToken: sessionB.refreshToken,
+            const challenge = await createPendingPasswordChallenge({
+                userId,
+                sessionId: sessionA.sessionId,
             });
 
-            expect(result.sessionId).toBe(sessionB.sessionId);
-            // Session B is now active; session A is untouched/still pending.
-            expect((await findSessionById(sessionB.sessionId))?.state).toBe("active");
+            await expect(
+                completePasswordStepUpChallenge({
+                    challengeId: challenge._id.toString(),
+                    password: PASSWORD,
+                    refreshToken: sessionB.refreshToken,
+                })
+            ).rejects.toThrow("Challenge session mismatch");
+
+            expect((await findSessionById(sessionB.sessionId))?.revokedAt).toBeInstanceOf(Date);
             expect((await findSessionById(sessionA.sessionId))?.state).toBe("step_up_pending");
+            expect(await challengeStatus(challenge._id.toString())).toBe("pending");
         });
 
         it("revokes the session on an invalid (non-pending) challenge while preserving challenge state (req 16)", async () => {
@@ -395,7 +403,10 @@ describe("services/step-up-password.service (db integration)", () => {
                 userId,
                 state: "step_up_pending",
             });
-            const challenge = await createVerifiedChallenge({ userId });
+            const challenge = await createVerifiedChallenge({
+                userId,
+                sessionId: issued.sessionId,
+            });
 
             await expect(
                 completePasswordStepUpChallenge({
