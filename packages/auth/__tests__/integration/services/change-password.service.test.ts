@@ -132,7 +132,7 @@ describe("services/change-password.service (db integration)", () => {
     });
 
     describe("versioning (returned vs persisted)", () => {
-        it("reports tokenVersionBefore but returns a STALE tokenVersionAfter (bug)", async () => {
+        it("returns tokenVersionAfter matching the persisted value after invalidation", async () => {
             const user = await createUser({ plainPassword: OLD_PASSWORD, tokenVersion: 2 });
             const userId = user._id.toString();
 
@@ -144,18 +144,10 @@ describe("services/change-password.service (db integration)", () => {
 
             const persisted = await readUser(userId);
 
-            // "Before" is correct.
             expect(result.tokenVersionBefore).toBe(2);
-
-            // BUG: the password update does not $inc tokenVersion, and the value
-            // is read before invalidateAllUserTokens runs the actual increment.
-            // So the returned "after" is stale and equals "before".
-            expect(result.tokenVersionAfter).toBe(2);
-            expect(result.tokenVersionAfter).toBe(result.tokenVersionBefore);
-
-            // The persisted version is actually 3 -> returned value mismatches reality.
+            expect(result.tokenVersionAfter).toBe(3);
             expect(persisted?.tokenVersion).toBe(3);
-            expect(result.tokenVersionAfter).not.toBe(persisted?.tokenVersion);
+            expect(result.tokenVersionAfter).toBe(persisted?.tokenVersion);
         });
     });
 

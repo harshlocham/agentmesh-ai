@@ -58,31 +58,28 @@ export async function changePasswordService(
     // Store the old token version before incrementing
     const tokenVersionBefore = user.tokenVersion || 0;
 
-    // Update password and increment tokenVersion atomically
+    // Update password; tokenVersion is incremented by invalidateAllUserTokens below.
     const updatedUser = await User.findByIdAndUpdate(
         userId,
         {
-            password: hashedNewPassword
+            password: hashedNewPassword,
         },
         { new: true }
     )
-        .select("_id tokenVersion")
-        .lean<{ _id: { toString(): string }; tokenVersion?: number } | null>();
+        .select("_id")
+        .lean<{ _id: { toString(): string } } | null>();
 
     if (!updatedUser) {
         throw new Error("Failed to update password");
     }
 
-    const tokenVersionAfter = updatedUser.tokenVersion || 0;
-
-    // Invalidate all tokens for this user (logs the event, handles session cleanup)
-    await invalidateAllUserTokens(userId, "password_changed");
+    const invalidationResult = await invalidateAllUserTokens(userId, "password_changed");
 
     return {
         userId,
         success: true,
         tokenVersionBefore,
-        tokenVersionAfter,
+        tokenVersionAfter: invalidationResult.newTokenVersion,
     };
 }
 
