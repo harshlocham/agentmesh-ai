@@ -19,6 +19,7 @@ const STEP_UP_TTL_MS = 5 * 60 * 1000;
 export interface StepUpChallengeFactoryAttrs {
     challengeId: string;
     userId: string;
+    sessionId: string;
     status: StepUpChallengeStatus;
     verificationMethod: StepUpChallengeVerificationMethod;
     expiresAt: Date;
@@ -32,6 +33,7 @@ export function buildStepUpChallenge(
     return {
         challengeId: overrides.challengeId ?? objectId(),
         userId: overrides.userId ?? objectId(),
+        sessionId: overrides.sessionId ?? objectId(),
         status: overrides.status ?? "pending",
         verificationMethod: overrides.verificationMethod ?? "password",
         expiresAt: overrides.expiresAt ?? new Date(Date.now() + STEP_UP_TTL_MS),
@@ -47,6 +49,7 @@ export async function createStepUpChallengeDoc(
     return StepUpChallenge.create({
         _id: new Types.ObjectId(attrs.challengeId),
         userId: new Types.ObjectId(attrs.userId),
+        sessionId: new Types.ObjectId(attrs.sessionId),
         status: attrs.status,
         verificationMethod: attrs.verificationMethod,
         expiresAt: attrs.expiresAt,

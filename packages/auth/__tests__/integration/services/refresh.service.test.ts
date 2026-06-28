@@ -274,6 +274,7 @@ describe("services/refresh.service (db integration)", () => {
             expect(challenge).not.toBeNull();
             expect(challenge?.status).toBe("pending");
             expect(String(challenge?.userId)).toBe(userId);
+            expect(String(challenge?.sessionId)).toBe(issued.sessionId);
             expect(
                 await StepUpChallenge.countDocuments({
                     userId: new Types.ObjectId(userId),
