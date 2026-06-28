@@ -1,7 +1,8 @@
+import mongoose from "mongoose";
 import { User } from "@/models/User";
 import { comparePassword } from "../password/compare";
 import { hashPassword } from "../password/hash";
-import { invalidateAllUserTokens } from "../tokens/invalidate";
+import { invalidateAllUserTokens, type TokenInvalidationResult } from "../tokens/invalidate";
 
 export interface ChangePasswordInput {
     userId: string;
@@ -23,9 +24,8 @@ export interface ChangePasswordOutput {
  * Process:
  * 1. Verify old password is correct
  * 2. Hash new password
- * 3. Update password in database
- * 4. Increment tokenVersion to invalidate all tokens
- * 5. Delete all active sessions
+ * 3. Atomically update password, increment tokenVersion, and delete sessions
+ *    inside a MongoDB transaction
  * 
  * @param input - Contains userId, oldPassword, and newPassword
  * @returns Result with token version update info
@@ -58,22 +58,38 @@ export async function changePasswordService(
     // Store the old token version before incrementing
     const tokenVersionBefore = user.tokenVersion || 0;
 
-    // Update password; tokenVersion is incremented by invalidateAllUserTokens below.
-    const updatedUser = await User.findByIdAndUpdate(
-        userId,
-        {
-            password: hashedNewPassword,
-        },
-        { new: true }
-    )
-        .select("_id")
-        .lean<{ _id: { toString(): string } } | null>();
+    const mongoSession = await mongoose.startSession();
+    let invalidationResult: TokenInvalidationResult | undefined;
 
-    if (!updatedUser) {
-        throw new Error("Failed to update password");
+    try {
+        await mongoSession.withTransaction(async () => {
+            const updatedUser = await User.findByIdAndUpdate(
+                userId,
+                {
+                    password: hashedNewPassword,
+                },
+                { new: true, session: mongoSession }
+            )
+                .select("_id")
+                .lean<{ _id: { toString(): string } } | null>();
+
+            if (!updatedUser) {
+                throw new Error("Failed to update password");
+            }
+
+            invalidationResult = await invalidateAllUserTokens(
+                userId,
+                "password_changed",
+                mongoSession
+            );
+        });
+    } finally {
+        await mongoSession.endSession();
     }
 
-    const invalidationResult = await invalidateAllUserTokens(userId, "password_changed");
+    if (!invalidationResult) {
+        throw new Error("Failed to change password");
+    }
 
     return {
         userId,

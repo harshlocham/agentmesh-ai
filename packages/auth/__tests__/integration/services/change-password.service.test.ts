@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Types } from "mongoose";
 import { changePasswordService } from "../../../services/change-password.service.js";
 import { comparePassword } from "../../../password/compare.js";
@@ -170,6 +170,34 @@ describe("services/change-password.service (db integration)", () => {
             expect(await countSessions(userId)).toBe(0);
             const after = await readUser(userId);
             expect(after?.tokenVersion).toBe(1);
+        });
+    });
+
+    describe("atomicity", () => {
+        it("rolls back the password update when session deletion fails", async () => {
+            const user = await createUser({ plainPassword: OLD_PASSWORD, tokenVersion: 1 });
+            const userId = user._id.toString();
+            await createSessionDoc({ userId });
+            const before = await readUser(userId);
+
+            const deleteManySpy = vi
+                .spyOn(SessionModel, "deleteMany")
+                .mockRejectedValueOnce(new Error("session delete failed"));
+
+            await expect(
+                changePasswordService({
+                    userId,
+                    oldPassword: OLD_PASSWORD,
+                    newPassword: NEW_PASSWORD,
+                })
+            ).rejects.toThrow("session delete failed");
+
+            const after = await readUser(userId);
+            expect(after?.password).toBe(before?.password);
+            expect(after?.tokenVersion).toBe(1);
+            expect(await countSessions(userId)).toBe(1);
+
+            deleteManySpy.mockRestore();
         });
     });
 

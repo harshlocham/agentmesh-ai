@@ -1,5 +1,6 @@
 import { User } from "@/models/User";
 import { deleteUserSessions } from "../repositories/session.repo";
+import type { ClientSession } from "mongoose";
 
 export type InvalidationReason =
     | "password_changed"
@@ -35,12 +36,13 @@ export interface TokenInvalidationResult {
  */
 export async function invalidateAllUserTokens(
     userId: string,
-    reason: InvalidationReason
+    reason: InvalidationReason,
+    mongoSession?: ClientSession
 ): Promise<TokenInvalidationResult> {
     const user = await User.findByIdAndUpdate(
         userId,
         { $inc: { tokenVersion: 1 } },
-        { new: true }
+        { new: true, session: mongoSession }
     )
         .select("_id tokenVersion")
         .lean<{ _id: { toString(): string }; tokenVersion?: number } | null>();
@@ -53,7 +55,7 @@ export async function invalidateAllUserTokens(
     const previousTokenVersion = Math.max(0, newTokenVersion - 1);
 
     // Delete all active sessions from database (session cleanup)
-    const deleteResult = await deleteUserSessions(user._id.toString());
+    const deleteResult = await deleteUserSessions(user._id.toString(), mongoSession);
     const sessionsRevoked = deleteResult.deletedCount || 0;
 
     return {

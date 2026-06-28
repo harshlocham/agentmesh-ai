@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { MongoMemoryServer } from "mongodb-memory-server";
+import { MongoMemoryReplSet } from "mongodb-memory-server";
 import { afterAll, afterEach, beforeAll } from "vitest";
 
 export interface TestDbHandle {
@@ -46,11 +46,13 @@ async function syncRegisteredIndexes(): Promise<void> {
  *   const { db } = useTestDb();
  */
 export function useTestDb(): { db: () => TestDbHandle } {
-    let server: MongoMemoryServer | undefined;
+    let server: MongoMemoryReplSet | undefined;
     let handle: TestDbHandle | undefined;
 
     beforeAll(async () => {
-        server = await MongoMemoryServer.create();
+        server = await MongoMemoryReplSet.create({
+            replSet: { count: 1, storageEngine: "wiredTiger" },
+        });
         const uri = server.getUri();
         await mongoose.connect(uri);
 
