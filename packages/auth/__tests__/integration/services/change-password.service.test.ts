@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Types } from "mongoose";
 import { changePasswordService } from "../../../services/change-password.service.js";
 import { comparePassword } from "../../../password/compare.js";
@@ -132,7 +132,7 @@ describe("services/change-password.service (db integration)", () => {
     });
 
     describe("versioning (returned vs persisted)", () => {
-        it("reports tokenVersionBefore but returns a STALE tokenVersionAfter (bug)", async () => {
+        it("returns tokenVersionAfter matching the persisted value after invalidation", async () => {
             const user = await createUser({ plainPassword: OLD_PASSWORD, tokenVersion: 2 });
             const userId = user._id.toString();
 
@@ -144,18 +144,10 @@ describe("services/change-password.service (db integration)", () => {
 
             const persisted = await readUser(userId);
 
-            // "Before" is correct.
             expect(result.tokenVersionBefore).toBe(2);
-
-            // BUG: the password update does not $inc tokenVersion, and the value
-            // is read before invalidateAllUserTokens runs the actual increment.
-            // So the returned "after" is stale and equals "before".
-            expect(result.tokenVersionAfter).toBe(2);
-            expect(result.tokenVersionAfter).toBe(result.tokenVersionBefore);
-
-            // The persisted version is actually 3 -> returned value mismatches reality.
+            expect(result.tokenVersionAfter).toBe(3);
             expect(persisted?.tokenVersion).toBe(3);
-            expect(result.tokenVersionAfter).not.toBe(persisted?.tokenVersion);
+            expect(result.tokenVersionAfter).toBe(persisted?.tokenVersion);
         });
     });
 
@@ -178,6 +170,34 @@ describe("services/change-password.service (db integration)", () => {
             expect(await countSessions(userId)).toBe(0);
             const after = await readUser(userId);
             expect(after?.tokenVersion).toBe(1);
+        });
+    });
+
+    describe("atomicity", () => {
+        it("rolls back the password update when session deletion fails", async () => {
+            const user = await createUser({ plainPassword: OLD_PASSWORD, tokenVersion: 1 });
+            const userId = user._id.toString();
+            await createSessionDoc({ userId });
+            const before = await readUser(userId);
+
+            const deleteManySpy = vi
+                .spyOn(SessionModel, "deleteMany")
+                .mockRejectedValueOnce(new Error("session delete failed"));
+
+            await expect(
+                changePasswordService({
+                    userId,
+                    oldPassword: OLD_PASSWORD,
+                    newPassword: NEW_PASSWORD,
+                })
+            ).rejects.toThrow("session delete failed");
+
+            const after = await readUser(userId);
+            expect(after?.password).toBe(before?.password);
+            expect(after?.tokenVersion).toBe(1);
+            expect(await countSessions(userId)).toBe(1);
+
+            deleteManySpy.mockRestore();
         });
     });
 

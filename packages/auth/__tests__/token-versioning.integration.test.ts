@@ -8,6 +8,19 @@ import {
 } from "../tokens/invalidate.js";
 
 // Mocks
+vi.mock("mongoose", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("mongoose")>();
+    return {
+        ...actual,
+        default: {
+            ...actual.default,
+            startSession: vi.fn().mockResolvedValue({
+                withTransaction: vi.fn(async (fn: () => Promise<void>) => fn()),
+                endSession: vi.fn().mockResolvedValue(undefined),
+            }),
+        },
+    };
+});
 vi.mock("@/models/User");
 vi.mock("../repositories/session.repo", () => ({
     deleteUserSessions: vi.fn().mockResolvedValue({ deletedCount: 3 }),

@@ -1,5 +1,7 @@
+import mongoose from "mongoose";
 import { User } from "@/models/User";
 import { deleteUserSessions } from "../repositories/session.repo";
+import type { ClientSession } from "mongoose";
 
 export type InvalidationReason =
     | "password_changed"
@@ -35,12 +37,13 @@ export interface TokenInvalidationResult {
  */
 export async function invalidateAllUserTokens(
     userId: string,
-    reason: InvalidationReason
+    reason: InvalidationReason,
+    mongoSession?: ClientSession
 ): Promise<TokenInvalidationResult> {
     const user = await User.findByIdAndUpdate(
         userId,
         { $inc: { tokenVersion: 1 } },
-        { new: true }
+        { new: true, session: mongoSession }
     )
         .select("_id tokenVersion")
         .lean<{ _id: { toString(): string }; tokenVersion?: number } | null>();
@@ -53,7 +56,7 @@ export async function invalidateAllUserTokens(
     const previousTokenVersion = Math.max(0, newTokenVersion - 1);
 
     // Delete all active sessions from database (session cleanup)
-    const deleteResult = await deleteUserSessions(user._id.toString());
+    const deleteResult = await deleteUserSessions(user._id.toString(), mongoSession);
     const sessionsRevoked = deleteResult.deletedCount || 0;
 
     return {
@@ -84,19 +87,36 @@ export async function invalidateUserToken(
 }
 
 /**
- * Batch invalidate tokens for multiple users (e.g., account takedown campaign)
- * 
+ * Batch invalidate tokens for multiple users (e.g., account takedown campaign).
+ * All users are processed inside a single MongoDB transaction; if any user fails,
+ * no mutations from the batch are committed.
+ *
  * @param userIds - Array of user IDs to invalidate
  * @param reason - The reason for batch invalidation
- * @returns Array of invalidation results
+ * @returns Array of invalidation results in input order
  */
 export async function invalidateMultipleUserTokens(
     userIds: string[],
     reason: InvalidationReason
 ): Promise<TokenInvalidationResult[]> {
-    const results = await Promise.all(
-        userIds.map((userId) => invalidateAllUserTokens(userId, reason))
-    );
+    if (userIds.length === 0) {
+        return [];
+    }
+
+    const mongoSession = await mongoose.startSession();
+    const results: TokenInvalidationResult[] = [];
+
+    try {
+        await mongoSession.withTransaction(async () => {
+            for (const userId of userIds) {
+                const result = await invalidateAllUserTokens(userId, reason, mongoSession);
+                results.push(result);
+            }
+        });
+    } finally {
+        await mongoSession.endSession();
+    }
+
     return results;
 }
 

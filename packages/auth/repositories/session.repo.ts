@@ -1,4 +1,4 @@
-import { Types } from "mongoose";
+import { Types, type ClientSession } from "mongoose";
 import { authConfig } from "../config";
 import { ISession, SessionModel } from "./sessionModel";
 
@@ -79,6 +79,12 @@ export async function deleteSession(id: string): Promise<ISession | null> {
     return SessionModel.findByIdAndDelete(id);
 }
 
-export async function deleteUserSessions(userId: string): Promise<{ deletedCount?: number }> {
-    return SessionModel.deleteMany({ userId: new Types.ObjectId(userId) });
+export async function deleteUserSessions(
+    userId: string,
+    session?: ClientSession
+): Promise<{ deletedCount?: number }> {
+    return SessionModel.deleteMany(
+        { userId: new Types.ObjectId(userId) },
+        session ? { session } : undefined
+    );
 }
