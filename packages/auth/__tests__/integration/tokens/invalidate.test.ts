@@ -182,26 +182,21 @@ describe("tokens/invalidate (db integration)", () => {
             ).rejects.toThrow("User not found");
         });
 
-        it("does NOT roll back already-applied mutations on partial failure", async () => {
+        it("rolls back all mutations when any user in the batch is missing", async () => {
             const userA = await createUser({ tokenVersion: 0 });
             const userId = userA._id.toString();
             await createSessionDoc({ userId });
 
-            let rejected = false;
-            try {
-                await invalidateMultipleUserTokens([userId, objectId()], "admin_revocation");
-            } catch {
-                rejected = true;
-            }
-            expect(rejected).toBe(true);
+            await expect(
+                invalidateMultipleUserTokens([userId, objectId()], "admin_revocation")
+            ).rejects.toThrow("User not found");
 
-            // Let any in-flight write for the valid user settle.
-            await new Promise((resolve) => setTimeout(resolve, 100));
+            expect(await getUserTokenVersion(userId)).toBe(0);
+            expect(await countSessions(userId)).toBe(1);
+        });
 
-            // BUG/inconsistency: the valid user was still mutated despite the
-            // batch rejecting — Promise.all provides no atomicity or rollback.
-            expect(await getUserTokenVersion(userId)).toBe(1);
-            expect(await countSessions(userId)).toBe(0);
+        it("returns an empty array for an empty input list", async () => {
+            await expect(invalidateMultipleUserTokens([], "admin_revocation")).resolves.toEqual([]);
         });
     });
 });
