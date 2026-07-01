@@ -16,7 +16,7 @@
     "clean:artifacts": "find apps packages -type d -name node_modules -prune -o -type d -name dist -prune -exec rm -rf '{}' + && find apps packages -type d -name node_modules -prune -o -type d -name build -prune -exec rm -rf '{}' + && find apps packages -type d -name node_modules -prune -o -type d -name .next -prune -exec rm -rf '{}' + && rm -rf .turbo && find apps packages -type d -name node_modules -prune -o -type f -name '*.tsbuildinfo' -delete",
     "clean:all": "pnpm run clean:artifacts && find . -type d -name node_modules -prune -exec rm -rf '{}' +",
     "changeset": "changeset",
-    "version-packages": "changeset version",
+    "version-packages": "changeset version && node scripts/ci/sync-root-release-version.mjs",
     "release": "echo \"Skipping npm publish for private repository\"",
     "typecheck": "turbo run typecheck --filter=./apps/* --filter=./packages/*",
     "seed:contacts": "tsx scripts/seed/contacts.ts",

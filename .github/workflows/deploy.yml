@@ -14,7 +14,7 @@ on:
       deploy_target:
         description: "Where to promote this release"
         required: true
-        default: both
+        default: staging
         type: choice
         options:
           - staging
@@ -61,6 +61,9 @@ jobs:
       legacy_version_tag: ${{ steps.meta.outputs.legacy_version_tag }}
       legacy_sha_tag: ${{ steps.meta.outputs.legacy_sha_tag }}
       legacy_latest_tag: ${{ steps.meta.outputs.legacy_latest_tag }}
+      task_worker_image: ${{ steps.meta.outputs.task_worker_image }}
+      task_worker_version_tag: ${{ steps.meta.outputs.task_worker_version_tag }}
+      task_worker_sha_tag: ${{ steps.meta.outputs.task_worker_sha_tag }}
 
     steps:
       - name: Print workflow_run context
@@ -262,6 +265,10 @@ jobs:
           echo "legacy_version_tag=$LEGACY_IMAGE:$VERSION" >> "$GITHUB_OUTPUT"
           echo "legacy_sha_tag=$LEGACY_IMAGE:sha-$SHORT_SHA" >> "$GITHUB_OUTPUT"
           echo "legacy_latest_tag=$LEGACY_IMAGE:latest" >> "$GITHUB_OUTPUT"
+          TASK_WORKER_IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/chat-task-worker"
+          echo "task_worker_image=$TASK_WORKER_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "task_worker_version_tag=$TASK_WORKER_IMAGE:$VERSION" >> "$GITHUB_OUTPUT"
+          echo "task_worker_sha_tag=$TASK_WORKER_IMAGE:sha-$SHORT_SHA" >> "$GITHUB_OUTPUT"
           echo "target=$TARGET" >> "$GITHUB_OUTPUT"
 
           # Immediate semver predecessor of the release being deployed (next lower tag
@@ -279,8 +286,8 @@ jobs:
           echo "Version: $VERSION"
           echo "Image: $IMAGE"
 
-  build_image:
-    name: Build And Push Image
+  build_image_socket:
+    name: Build And Push Socket Image
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: prepare
@@ -402,12 +409,117 @@ jobs:
           echo "Deploy digest:           ${{ steps.digest.outputs.deploy_ref }}"
           echo "Moving 'latest' tags are advanced after a successful deploy."
 
+  build_image_task_worker:
+    name: Build And Push Task Worker Image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: prepare
+    if: needs.prepare.outputs.should_deploy == 'true' && vars.ENABLE_TASK_WORKER_DEPLOY == 'true'
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      should_build: ${{ steps.image_guard.outputs.should_build }}
+      image_digest: ${{ steps.digest.outputs.image_digest }}
+      deploy_ref: ${{ steps.digest.outputs.deploy_ref }}
+
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.release_sha }}
+
+      - name: Login to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Check if immutable version image already exists
+        id: image_guard
+        run: |
+          set -euxo pipefail
+          VERSION_TAG="${{ needs.prepare.outputs.task_worker_version_tag }}"
+
+          if docker buildx imagetools inspect "$VERSION_TAG" > /dev/null 2>&1; then
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            echo "Version image already exists: $VERSION_TAG"
+          else
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            echo "Version image does not exist yet: $VERSION_TAG"
+          fi
+
+      - name: Build and push immutable image tags
+        if: steps.image_guard.outputs.should_build == 'true'
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: apps/task-worker/Dockerfile
+          push: true
+          tags: |
+            ${{ needs.prepare.outputs.task_worker_version_tag }}
+            ${{ needs.prepare.outputs.task_worker_sha_tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.prepare.outputs.release_sha }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.release_version }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Resolve image digest for deployment
+        id: digest
+        run: |
+          set -euo pipefail
+          IMAGE="${{ needs.prepare.outputs.task_worker_image }}"
+          if [[ "${{ steps.image_guard.outputs.should_build }}" == "true" ]]; then
+            DIGEST="${{ steps.build.outputs.digest }}"
+          else
+            DIGEST="$(docker buildx imagetools inspect "${{ needs.prepare.outputs.task_worker_version_tag }}" --format '{{.Manifest.Digest}}')"
+          fi
+
+          if [[ "$DIGEST" != sha256:* ]]; then
+            echo "::error::Could not resolve a valid task-worker image digest (got '${DIGEST:-<empty>}')."
+            exit 1
+          fi
+
+          echo "image_digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "deploy_ref=${IMAGE}@${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "Deploying task-worker by immutable digest: ${IMAGE}@${DIGEST}"
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
+
+      - name: Sign image by digest (keyless)
+        env:
+          DEPLOY_REF: ${{ steps.digest.outputs.deploy_ref }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "$DEPLOY_REF"
+
+      - name: Print published image refs
+        run: |
+          set -euxo pipefail
+          echo "Published immutable tag: ${{ needs.prepare.outputs.task_worker_version_tag }}"
+          echo "Published commit tag:    ${{ needs.prepare.outputs.task_worker_sha_tag }}"
+          echo "Deploy digest:           ${{ steps.digest.outputs.deploy_ref }}"
+
   deploy_staging:
     name: Deploy Staging
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    needs: [prepare, build_image]
-    if: needs.prepare.outputs.should_deploy == 'true' && (needs.prepare.outputs.target == 'staging' || needs.prepare.outputs.target == 'both')
+    timeout-minutes: 30
+    needs: [prepare, build_image_socket, build_image_task_worker]
+    if: >
+      needs.prepare.outputs.should_deploy == 'true' &&
+      needs.build_image_socket.result == 'success' &&
+      (needs.build_image_task_worker.result == 'success' || needs.build_image_task_worker.result == 'skipped') &&
+      (needs.prepare.outputs.target == 'staging' || needs.prepare.outputs.target == 'both')
     environment:
       name: staging
     concurrency:
@@ -471,21 +583,69 @@ jobs:
             });
             core.setOutput("deployment_id", String(result.data.id));
 
-      - name: Deploy to staging
+      - name: Checkout release commit
         if: steps.staging_guard.outputs.already_deployed != 'true'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.release_sha }}
+
+      - name: Configure SSH key for VPS
+        if: steps.staging_guard.outputs.already_deployed != 'true' && vars.ENABLE_TASK_WORKER_DEPLOY == 'true'
         run: |
-          set -euxo pipefail
-          echo "Deploying ${{ needs.build_image.outputs.deploy_ref }} (${{ needs.prepare.outputs.release_tag }}) to staging"
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Deploy socket to Render (staging)
+        if: steps.staging_guard.outputs.already_deployed != 'true'
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SOCKET_SERVICE_ID: ${{ vars.RENDER_SOCKET_STAGING_SERVICE_ID }}
+          SOCKET_DEPLOY_REF: ${{ needs.build_image_socket.outputs.deploy_ref }}
+        run: bash ./scripts/ci/deploy/render-socket.sh
+
+      - name: Deploy task-worker to VPS (staging)
+        if: steps.staging_guard.outputs.already_deployed != 'true' && vars.ENABLE_TASK_WORKER_DEPLOY == 'true'
+        env:
+          VPS_HOST: ${{ vars.VPS_STAGING_HOST || vars.VPS_HOST }}
+          VPS_USER: ${{ vars.VPS_USER }}
+          VPS_DEPLOY_PATH: ${{ vars.VPS_STAGING_DEPLOY_PATH || vars.VPS_DEPLOY_PATH }}
+          VPS_SSH_IDENTITY_FILE: ~/.ssh/id_ed25519
+          TASK_WORKER_DEPLOY_REF: ${{ needs.build_image_task_worker.outputs.deploy_ref }}
+        run: |
+          set -euo pipefail
+          export GHCR_PULL_TOKEN="${{ secrets.GHCR_PULL_TOKEN }}"
+          if [[ -z "$GHCR_PULL_TOKEN" ]]; then
+            export GHCR_PULL_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          fi
+          bash ./scripts/ci/deploy/vps-task-worker.sh
+
+      - name: Deploy web to Vercel (staging)
+        if: steps.staging_guard.outputs.already_deployed != 'true'
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          DEPLOY_ENVIRONMENT: staging
+          RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
+        run: bash ./scripts/ci/deploy/vercel.sh
 
       - name: Health check staging
         if: steps.staging_guard.outputs.already_deployed != 'true'
         run: |
           set -euo pipefail
-          if [[ -z "${{ vars.STAGING_HEALTHCHECK_URL || '' }}" ]]; then
-            echo "STAGING_HEALTHCHECK_URL is not set. Skipping health check."
-            exit 0
+          if [[ -n "${{ vars.STAGING_HEALTHCHECK_URL || '' }}" ]]; then
+            curl -f -L --retry 5 --retry-delay 5 "${{ vars.STAGING_HEALTHCHECK_URL }}"
+          else
+            echo "STAGING_HEALTHCHECK_URL is not set. Skipping web health check."
           fi
-          curl -f -L --retry 5 --retry-delay 5 "${{ vars.STAGING_HEALTHCHECK_URL }}"
+          if [[ -n "${{ vars.RENDER_SOCKET_STAGING_HEALTHCHECK_URL || '' }}" ]]; then
+            curl -f -L --retry 5 --retry-delay 5 "${{ vars.RENDER_SOCKET_STAGING_HEALTHCHECK_URL }}"
+          else
+            echo "RENDER_SOCKET_STAGING_HEALTHCHECK_URL is not set. Skipping socket health check."
+          fi
 
       - name: Mark staging deployment success
         if: steps.staging_guard.outputs.already_deployed != 'true'
@@ -521,12 +681,13 @@ jobs:
   deploy_production:
     name: Deploy Production
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    needs: [prepare, build_image, deploy_staging, approve_promotion]
+    timeout-minutes: 30
+    needs: [prepare, build_image_socket, build_image_task_worker, deploy_staging, approve_promotion]
     if: >
       always() &&
       needs.prepare.outputs.should_deploy == 'true' &&
-      needs.build_image.result == 'success' &&
+      needs.build_image_socket.result == 'success' &&
+      (needs.build_image_task_worker.result == 'success' || needs.build_image_task_worker.result == 'skipped') &&
       (
         needs.prepare.outputs.target == 'production' ||
         (
@@ -598,11 +759,54 @@ jobs:
             });
             core.setOutput("deployment_id", String(result.data.id));
 
-      - name: Deploy to production
+      - name: Checkout release commit
         if: steps.production_guard.outputs.already_deployed != 'true'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.release_sha }}
+
+      - name: Configure SSH key for VPS
+        if: steps.production_guard.outputs.already_deployed != 'true' && vars.ENABLE_TASK_WORKER_DEPLOY == 'true'
         run: |
-          set -euxo pipefail
-          echo "Deploying ${{ needs.build_image.outputs.deploy_ref }} (${{ needs.prepare.outputs.release_tag }}) to production"
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Deploy socket to Render (production)
+        if: steps.production_guard.outputs.already_deployed != 'true'
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SOCKET_SERVICE_ID: ${{ vars.RENDER_SOCKET_SERVICE_ID }}
+          SOCKET_DEPLOY_REF: ${{ needs.build_image_socket.outputs.deploy_ref }}
+        run: bash ./scripts/ci/deploy/render-socket.sh
+
+      - name: Deploy task-worker to VPS (production)
+        if: steps.production_guard.outputs.already_deployed != 'true' && vars.ENABLE_TASK_WORKER_DEPLOY == 'true'
+        env:
+          VPS_HOST: ${{ vars.VPS_HOST }}
+          VPS_USER: ${{ vars.VPS_USER }}
+          VPS_DEPLOY_PATH: ${{ vars.VPS_DEPLOY_PATH }}
+          VPS_SSH_IDENTITY_FILE: ~/.ssh/id_ed25519
+          TASK_WORKER_DEPLOY_REF: ${{ needs.build_image_task_worker.outputs.deploy_ref }}
+        run: |
+          set -euo pipefail
+          export GHCR_PULL_TOKEN="${{ secrets.GHCR_PULL_TOKEN }}"
+          if [[ -z "$GHCR_PULL_TOKEN" ]]; then
+            export GHCR_PULL_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          fi
+          bash ./scripts/ci/deploy/vps-task-worker.sh
+
+      - name: Deploy web to Vercel (production)
+        if: steps.production_guard.outputs.already_deployed != 'true'
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          DEPLOY_ENVIRONMENT: production
+          RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
+        run: bash ./scripts/ci/deploy/vercel.sh
 
       - name: Health check production
         if: steps.production_guard.outputs.already_deployed != 'true'
@@ -610,12 +814,16 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          if [[ -z "${{ vars.PRODUCTION_HEALTHCHECK_URL || '' }}" ]]; then
-            echo "PRODUCTION_HEALTHCHECK_URL is not set. Skipping healt
-            h check."
-            exit 0
+          if [[ -n "${{ vars.PRODUCTION_HEALTHCHECK_URL || '' }}" ]]; then
+            curl -f -L --retry 8 --retry-delay 10 "${{ vars.PRODUCTION_HEALTHCHECK_URL }}"
+          else
+            echo "PRODUCTION_HEALTHCHECK_URL is not set. Skipping web health check."
           fi
-          curl -f -L --retry 8 --retry-delay 10 "${{ vars.PRODUCTION_HEALTHCHECK_URL }}"
+          if [[ -n "${{ vars.RENDER_SOCKET_HEALTHCHECK_URL || '' }}" ]]; then
+            curl -f -L --retry 8 --retry-delay 10 "${{ vars.RENDER_SOCKET_HEALTHCHECK_URL }}"
+          else
+            echo "RENDER_SOCKET_HEALTHCHECK_URL is not set. Skipping socket health check."
+          fi
 
       - name: Trigger rollback workflow on failed production health check
         if: steps.production_guard.outputs.already_deployed != 'true' && steps.production_health.outcome == 'failure' && needs.prepare.outputs.previous_release_tag != ''
@@ -658,7 +866,7 @@ jobs:
     name: Promote Moving Tags
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [prepare, build_image, deploy_staging, deploy_production]
+    needs: [prepare, build_image_socket, deploy_staging, deploy_production]
     # Advance the mutable "latest" aliases only after the rollout they describe has
     # actually succeeded. This fixes the premature/never-reverted latest pointer:
     # if a deploy or health check fails, the moving tags are simply left untouched
@@ -666,7 +874,7 @@ jobs:
     if: >
       always() &&
       needs.prepare.outputs.should_deploy == 'true' &&
-      needs.build_image.result == 'success' &&
+      needs.build_image_socket.result == 'success' &&
       (
         (
           (needs.prepare.outputs.target == 'production' || needs.prepare.outputs.target == 'both') &&
@@ -710,7 +918,7 @@ jobs:
           set -euxo pipefail
           RELEASE_TAG="${{ needs.prepare.outputs.release_tag }}"
           VERSION_TAG="${{ needs.prepare.outputs.version_tag }}"
-          DEPLOY_REF="${{ needs.build_image.outputs.deploy_ref }}"
+          DEPLOY_REF="${{ needs.build_image_socket.outputs.deploy_ref }}"
           LATEST_TAG="${{ needs.prepare.outputs.latest_tag }}"
           LEGACY_LATEST_TAG="${{ needs.prepare.outputs.legacy_latest_tag }}"
 

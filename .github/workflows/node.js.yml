@@ -89,6 +89,9 @@ jobs:
       - name: Build shared packages
         run: pnpm exec turbo run build --filter=./packages/*
 
+      - name: Unit tests
+        run: pnpm run test
+
       - name: Type check
         run: pnpm run typecheck
 

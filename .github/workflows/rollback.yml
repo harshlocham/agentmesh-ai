@@ -22,12 +22,13 @@ jobs:
   rollback-production:
     name: Rollback Production
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     environment:
       name: production
     outputs:
       release_tag: ${{ steps.meta.outputs.release_tag }}
       version_tag: ${{ steps.meta.outputs.version_tag }}
+      task_worker_version_tag: ${{ steps.meta.outputs.task_worker_version_tag }}
       latest_tag: ${{ steps.meta.outputs.latest_tag }}
       legacy_latest_tag: ${{ steps.meta.outputs.legacy_latest_tag }}
       release_sha: ${{ steps.meta.outputs.release_sha }}
@@ -54,8 +55,10 @@ jobs:
           RELEASE_TAG="${{ github.event.inputs.version }}"
           RELEASE_VERSION="${RELEASE_TAG#v}"
           IMAGE_NAME="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/chat-socket"
+          TASK_WORKER_IMAGE_NAME="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/chat-task-worker"
           LEGACY_IMAGE_NAME="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/chat-services"
           VERSION_TAG="${IMAGE_NAME}:${RELEASE_VERSION}"
+          TASK_WORKER_VERSION_TAG="${TASK_WORKER_IMAGE_NAME}:${RELEASE_VERSION}"
 
           git fetch --force --tags
 
@@ -71,6 +74,7 @@ jobs:
             echo "release_version=${RELEASE_VERSION}"
             echo "image_name=${IMAGE_NAME}"
             echo "version_tag=${VERSION_TAG}"
+            echo "task_worker_version_tag=${TASK_WORKER_VERSION_TAG}"
             echo "latest_tag=${IMAGE_NAME}:latest"
             echo "legacy_latest_tag=${LEGACY_IMAGE_NAME}:latest"
             echo "release_sha=${RELEASE_SHA}"
@@ -86,7 +90,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      - name: Verify rollback image exists in registry
+      - name: Verify socket rollback image exists in registry
         run: |
           set -euo pipefail
           VERSION_TAG="${{ steps.meta.outputs.version_tag }}"
@@ -95,7 +99,19 @@ jobs:
             echo "::error::Cannot roll back to a version that was never built and pushed."
             exit 1
           fi
-          echo "Rollback target image verified: $VERSION_TAG"
+          echo "Rollback target socket image verified: $VERSION_TAG"
+
+      - name: Verify task-worker rollback image exists in registry
+        if: vars.ENABLE_TASK_WORKER_DEPLOY == 'true'
+        run: |
+          set -euo pipefail
+          TASK_WORKER_VERSION_TAG="${{ steps.meta.outputs.task_worker_version_tag }}"
+          if ! docker buildx imagetools inspect "$TASK_WORKER_VERSION_TAG" > /dev/null 2>&1; then
+            echo "::error::Rollback image not found in registry: $TASK_WORKER_VERSION_TAG"
+            echo "::error::Cannot roll back to a version that was never built and pushed."
+            exit 1
+          fi
+          echo "Rollback target task-worker image verified: $TASK_WORKER_VERSION_TAG"
 
       - name: Record rollback deployment start
         id: rollback_start
@@ -115,22 +131,66 @@ jobs:
             });
             core.setOutput("deployment_id", String(result.data.id));
 
-      - name: Roll back production deployment
+      - name: Checkout rollback release tag
         run: |
           set -euo pipefail
-          echo "Rolling back production to ${{ steps.meta.outputs.version_tag }}"
-          # Replace this echo with your real deployment command.
+          git checkout --force "${{ steps.meta.outputs.release_tag }}"
+
+      - name: Configure SSH key for VPS
+        if: vars.ENABLE_TASK_WORKER_DEPLOY == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Roll back socket on Render
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SOCKET_SERVICE_ID: ${{ vars.RENDER_SOCKET_SERVICE_ID }}
+          SOCKET_DEPLOY_REF: ${{ steps.meta.outputs.version_tag }}
+        run: bash ./scripts/ci/deploy/render-socket.sh
+
+      - name: Roll back task-worker on VPS
+        if: vars.ENABLE_TASK_WORKER_DEPLOY == 'true'
+        env:
+          VPS_HOST: ${{ vars.VPS_HOST }}
+          VPS_USER: ${{ vars.VPS_USER }}
+          VPS_DEPLOY_PATH: ${{ vars.VPS_DEPLOY_PATH }}
+          VPS_SSH_IDENTITY_FILE: ~/.ssh/id_ed25519
+          TASK_WORKER_DEPLOY_REF: ${{ steps.meta.outputs.task_worker_version_tag }}
+        run: |
+          set -euo pipefail
+          export GHCR_PULL_TOKEN="${{ secrets.GHCR_PULL_TOKEN }}"
+          if [[ -z "$GHCR_PULL_TOKEN" ]]; then
+            export GHCR_PULL_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          fi
+          bash ./scripts/ci/deploy/vps-task-worker.sh
+
+      - name: Roll back web on Vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          DEPLOY_ENVIRONMENT: production
+          RELEASE_SHA: ${{ steps.meta.outputs.release_sha }}
+        run: bash ./scripts/ci/deploy/vercel.sh
 
       - name: Health check production after rollback
         id: rollback_health
         continue-on-error: true
         run: |
           set -euo pipefail
-          if [[ -z "${{ vars.PRODUCTION_HEALTHCHECK_URL || '' }}" ]]; then
-            echo "PRODUCTION_HEALTHCHECK_URL is not set. Skipping health check."
-            exit 0
+          if [[ -n "${{ vars.PRODUCTION_HEALTHCHECK_URL || '' }}" ]]; then
+            curl -f -L --retry 8 --retry-delay 10 "${{ vars.PRODUCTION_HEALTHCHECK_URL }}"
+          else
+            echo "PRODUCTION_HEALTHCHECK_URL is not set. Skipping web health check."
           fi
-          curl -f -L --retry 8 --retry-delay 10 "${{ vars.PRODUCTION_HEALTHCHECK_URL }}"
+          if [[ -n "${{ vars.RENDER_SOCKET_HEALTHCHECK_URL || '' }}" ]]; then
+            curl -f -L --retry 8 --retry-delay 10 "${{ vars.RENDER_SOCKET_HEALTHCHECK_URL }}"
+          else
+            echo "RENDER_SOCKET_HEALTHCHECK_URL is not set. Skipping socket health check."
+          fi
 
       - name: Fail when post-rollback health check fails
         if: steps.rollback_health.outcome == 'failure'
@@ -177,7 +237,8 @@ jobs:
             echo ""
             echo "- Version: ${{ steps.meta.outputs.release_tag }}"
             echo "- Image: ${{ steps.meta.outputs.image_name }}"
-            echo "- Image tag: ${{ steps.meta.outputs.version_tag }}"
+            echo "- Socket image tag: ${{ steps.meta.outputs.version_tag }}"
+            echo "- Task-worker image tag: ${{ steps.meta.outputs.task_worker_version_tag }}"
             echo "- Health check: ${{ steps.rollback_health.outcome }}"
           } >> "$GITHUB_STEP_SUMMARY"
 

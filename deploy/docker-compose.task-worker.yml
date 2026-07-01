@@ -1,0 +1,5 @@
+services:
+  task-worker:
+    image: ${TASK_WORKER_IMAGE}
+    restart: unless-stopped
+    env_file: .env
